@@ -28,8 +28,10 @@ def nmap_scan(self, task_data):
         result = {
             "status": "completed",
             "task_id": self.request.id,
+            "tool": "nmap",
             "target": target,
-            "result": parsed
+            "result": parsed,
+            "error": None
         }
 
         logger.info(f"[{self.request.id}] Task finished successfully")
@@ -42,5 +44,8 @@ def nmap_scan(self, task_data):
         return {
             "status": "failed",
             "task_id": self.request.id,
+            "tool": "nmap",
+            "target": target,
+            "result": None,
             "error": str(e)
         }
