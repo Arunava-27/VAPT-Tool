@@ -1,0 +1,485 @@
+services:
+  # =============================================================================
+  # Data Layer Services
+  # =============================================================================
+  
+  postgres:
+    image: postgres:15-alpine
+    container_name: vapt-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vapt_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-vapt_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - data-network
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vapt_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: vapt-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redis123}
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend-network
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: vapt-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - backend-network
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: vapt-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - cluster.name=vapt-cluster
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - data-network
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: vapt-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - minio_data:/data
+    networks:
+      - data-network
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # =============================================================================
+  # Core Services
+  # =============================================================================
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: vapt-api-gateway
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-vapt_user}:${POSTGRES_PASSWORD:-changeme123}@postgres:5432/${POSTGRES_DB:-vapt_platform}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-supersecretkey-changeme}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./api-gateway:/app
+    networks:
+      - frontend-network
+      - backend-network
+      - data-network
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    profiles:
+      - api
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: vapt-orchestrator
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-vapt_user}:${POSTGRES_PASSWORD:-changeme123}@postgres:5432/${POSTGRES_DB:-vapt_platform}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/1
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./orchestrator:/app
+    networks:
+      - backend-network
+      - data-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - orchestrator
+
+  ai-engine:
+    build:
+      context: ./ai-engine
+      dockerfile: Dockerfile
+    container_name: vapt-ai-engine
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-vapt_user}:${POSTGRES_PASSWORD:-changeme123}@postgres:5432/${POSTGRES_DB:-vapt_platform}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/2
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-llama2}
+      - LLM_FALLBACK_ENABLED=${LLM_FALLBACK_ENABLED:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./ai-engine:/app
+    networks:
+      - backend-network
+      - data-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - ai
+
+  # Optional: Local LLM server (Ollama)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: vapt-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - backend-network
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    profiles:
+      - ai
+      - local-llm
+
+  # =============================================================================
+  # Worker Services (Security Tools)
+  # =============================================================================
+
+  worker-nmap:
+    build:
+      context: ./workers/nmap
+      dockerfile: Dockerfile
+    container_name: vapt-worker-nmap
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=rpc://
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./workers/nmap/app:/app/app
+    networks:
+      - backend-network
+      - scan-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    profiles:
+      - workers
+
+  worker-zap:
+    build:
+      context: ./workers/zap
+      dockerfile: Dockerfile
+    container_name: vapt-worker-zap
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=rpc://
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - ZAP_PORT=${ZAP_PORT:-8080}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./workers/zap/app:/app/app
+    networks:
+      - backend-network
+      - scan-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - workers
+
+  worker-trivy:
+    build:
+      context: ./workers/trivy
+      dockerfile: Dockerfile
+    container_name: vapt-worker-trivy
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=rpc://
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./workers/trivy/app:/app/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backend-network
+      - scan-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - workers
+
+  worker-prowler:
+    build:
+      context: ./workers/prowler
+      dockerfile: Dockerfile
+    container_name: vapt-worker-prowler
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=rpc://
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./workers/prowler/app:/app/app
+    networks:
+      - backend-network
+      - scan-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - workers
+
+  worker-metasploit:
+    build:
+      context: ./workers/metasploit
+      dockerfile: Dockerfile
+    container_name: vapt-worker-metasploit
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=rpc://
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./workers/metasploit/app:/app/app
+    networks:
+      - backend-network
+      - scan-network
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    privileged: true
+    profiles:
+      - workers
+
+  # =============================================================================
+  # Frontend
+  # =============================================================================
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vapt-frontend
+    environment:
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-http://localhost:8000}
+      - VITE_WS_BASE_URL=${VITE_WS_BASE_URL:-ws://localhost:8000}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - frontend-network
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+    profiles:
+      - frontend
+
+  # =============================================================================
+  # Monitoring (Optional)
+  # =============================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: vapt-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - backend-network
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: vapt-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - backend-network
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+# =============================================================================
+# Networks
+# =============================================================================
+
+networks:
+  frontend-network:
+    driver: bridge
+    name: vapt-frontend-network
+  
+  backend-network:
+    driver: bridge
+    name: vapt-backend-network
+    internal: false  # Set to true for air-gapped mode
+  
+  data-network:
+    driver: bridge
+    name: vapt-data-network
+    internal: true
+  
+  scan-network:
+    driver: bridge
+    name: vapt-scan-network
+    internal: false  # Workers need internet for scanning targets
+
+# =============================================================================
+# Volumes
+# =============================================================================
+
+volumes:
+  postgres_data:
+    name: vapt-postgres-data
+  
+  redis_data:
+    name: vapt-redis-data
+  
+  rabbitmq_data:
+    name: vapt-rabbitmq-data
+  
+  elasticsearch_data:
+    name: vapt-elasticsearch-data
+  
+  minio_data:
+    name: vapt-minio-data
+  
+  ollama_data:
+    name: vapt-ollama-data
+  
+  prometheus_data:
+    name: vapt-prometheus-data
+  
+  grafana_data:
+    name: vapt-grafana-data
