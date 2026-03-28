@@ -33,18 +33,10 @@ app = FastAPI(
 )
 
 
-# Add middlewares (order matters - last added is executed first)
+# Add middlewares (order matters — Starlette is LIFO: last added runs first)
 
-# CORS Configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Rate Limiting (before tenant context)
+# Inner middlewares (run AFTER CORS in request pipeline)
+# Rate Limiting
 if settings.RATE_LIMIT_ENABLED:
     app.add_middleware(RateLimitMiddleware)
     logger.info("Rate limiting enabled")
@@ -53,6 +45,17 @@ if settings.RATE_LIMIT_ENABLED:
 if settings.MULTI_TENANT_ENABLED:
     app.add_middleware(TenantContextMiddleware)
     logger.info("Multi-tenant mode enabled")
+
+# CORS must be added LAST so it runs FIRST (outermost wrapper).
+# This ensures every response — including rate-limit rejections and
+# tenant errors — carries the correct Access-Control-Allow-Origin header.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Root endpoint
