@@ -40,8 +40,8 @@ class Role(Base):
     is_system_role = Column(Boolean, default=False, nullable=False)  # System roles can't be deleted
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     
     # Relationships
     users = relationship("User", secondary=user_roles, back_populates="roles")

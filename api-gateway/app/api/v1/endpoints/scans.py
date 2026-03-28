@@ -249,7 +249,7 @@ async def cancel_scan(
         orch.cancel_scan(scan.id, reason="Cancelled by user")
         
         scan.status = "cancelled"
-        scan.completed_at = datetime.utcnow()
+        scan.completed_at = datetime.now()
         db.commit()
     
     except Exception as e:

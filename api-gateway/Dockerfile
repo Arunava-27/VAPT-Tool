@@ -28,8 +28,9 @@ WORKDIR /app
 
 # Copy wheels and install
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
-    && rm -rf /wheels
+COPY --from=builder /wheels/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r /tmp/requirements.txt \
+    && rm -rf /wheels /tmp/requirements.txt
 
 # Copy application
 COPY app/ app/

@@ -5,7 +5,7 @@ Role-Based Access Control dependencies and utilities
 from fastapi import Depends, HTTPException, status
 from typing import List
 
-from ..models.user import User
+from ....models.user import User
 from .auth import get_current_active_user
 
 

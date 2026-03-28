@@ -2,7 +2,7 @@
 Pydantic schemas for authentication
 """
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, field_validator
 from typing import Optional
 
 
@@ -22,8 +22,16 @@ class TokenData(BaseModel):
 
 class LoginRequest(BaseModel):
     """Login request"""
-    email: EmailStr
+    email: str  # Changed from EmailStr to str to allow .local domains
     password: str
+    
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v):
+        """Validate email format (allow .local for development)"""
+        if '@' not in v:
+            raise ValueError('Invalid email format')
+        return v.lower()
 
 
 class RefreshTokenRequest(BaseModel):
@@ -39,7 +47,15 @@ class PasswordChangeRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     """Password reset request"""
-    email: EmailStr
+    email: str  # Changed from EmailStr
+    
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v):
+        """Validate email format"""
+        if '@' not in v:
+            raise ValueError('Invalid email format')
+        return v.lower()
 
 
 class PasswordResetConfirm(BaseModel):

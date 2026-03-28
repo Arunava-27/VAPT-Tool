@@ -190,7 +190,7 @@ class ScanOrchestrator:
         for task in scan_job.worker_tasks:
             if task.id == worker_task_id:
                 task.status = ScanStatus.COMPLETED
-                task.completed_at = datetime.utcnow()
+                task.completed_at = datetime.now()
                 task.result = result
                 break
         
@@ -231,7 +231,7 @@ class ScanOrchestrator:
         for task in scan_job.worker_tasks:
             if task.id == worker_task_id:
                 task.status = ScanStatus.FAILED
-                task.completed_at = datetime.utcnow()
+                task.completed_at = datetime.now()
                 task.error = error
                 break
         

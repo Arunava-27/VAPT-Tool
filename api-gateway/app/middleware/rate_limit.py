@@ -9,7 +9,7 @@ from collections import defaultdict
 from typing import Dict, Tuple
 import asyncio
 
-from ...core.config import settings
+from ..core.config import settings
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

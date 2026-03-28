@@ -144,7 +144,7 @@ class ScanStateMachine:
         scan_job.status = to_status
         
         # Update timing fields
-        now = datetime.utcnow()
+        now = datetime.now()
         
         if to_status == ScanStatus.QUEUED:
             scan_job.queued_at = now

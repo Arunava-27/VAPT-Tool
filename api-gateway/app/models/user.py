@@ -41,8 +41,8 @@ class User(Base):
     login_count = Column(String(10), default="0")
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     
     # Relationships
     tenant = relationship("Tenant", back_populates="users")

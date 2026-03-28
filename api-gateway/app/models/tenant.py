@@ -41,8 +41,8 @@ class Tenant(Base):
     max_concurrent_scans = Column(String(5), default="5")
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
     
     # Relationships
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")

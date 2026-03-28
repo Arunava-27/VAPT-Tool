@@ -6,9 +6,9 @@ from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 
-from ...db.session import SessionLocal
-from ...models.user import User
-from ...core.security import decode_token
+from ..db.session import SessionLocal
+from ..models.user import User
+from ..core.security import decode_token
 
 
 class TenantContextMiddleware(BaseHTTPMiddleware):

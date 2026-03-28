@@ -143,7 +143,7 @@ class ScanJob(BaseModel):
     worker_tasks: List[WorkerTask] = Field(default_factory=list)
     
     # Timing
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=datetime.now)
     queued_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -206,8 +206,8 @@ class VulnerabilityFinding(BaseModel):
     exploitable: bool = False
     
     # Timestamps
-    first_seen: datetime = Field(default_factory=datetime.utcnow)
-    last_seen: datetime = Field(default_factory=datetime.utcnow)
+    first_seen: datetime = Field(default_factory=datetime.now)
+    last_seen: datetime = Field(default_factory=datetime.now)
 
 
 class ScanResult(BaseModel):
@@ -241,7 +241,7 @@ class ScanResult(BaseModel):
     ai_recommendations: Optional[List[str]] = None
     
     # Timestamps
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=datetime.now)
 
 
 # ============================================================================
@@ -254,7 +254,7 @@ class StateTransition(BaseModel):
     from_status: ScanStatus
     to_status: ScanStatus
     reason: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=datetime.now)
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -265,4 +265,4 @@ class WorkflowEvent(BaseModel):
     worker_task_id: Optional[UUID] = None
     message: str
     data: Optional[Dict[str, Any]] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=datetime.now)

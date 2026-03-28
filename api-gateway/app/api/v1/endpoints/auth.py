@@ -113,15 +113,15 @@ async def login(
         )
     
     # Update last login
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now()
     user.login_count = str(int(user.login_count) + 1)
     db.commit()
     
     # Create tokens
     token_data = {
-        "sub": user.id,
-        "email": user.email,
-        "tenant_id": user.tenant_id
+        "sub": str(user.id),
+        "email": str(user.email),
+        "tenant_id": str(user.tenant_id)
     }
     
     access_token = create_access_token(token_data)
@@ -167,9 +167,9 @@ async def refresh_token(
     
     # Create new tokens
     token_data = {
-        "sub": user.id,
-        "email": user.email,
-        "tenant_id": user.tenant_id
+        "sub": str(user.id),
+        "email": str(user.email),
+        "tenant_id": str(user.tenant_id)
     }
     
     access_token = create_access_token(token_data)
