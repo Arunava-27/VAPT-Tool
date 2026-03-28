@@ -109,47 +109,47 @@ async def probe_ai_engine() -> Dict[str, Any]:
 
 
 async def probe_celery_workers() -> List[Dict[str, Any]]:
-    """Inspect all Celery workers via broker ping."""
+    """Check worker health via RabbitMQ Management API queue consumer counts."""
+    known_queues = ["nmap", "zap", "trivy", "prowler", "metasploit"]
+    results = []
+
     try:
-        from celery import Celery
-        import os
+        rmq_url = getattr(settings, "RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+        # Parse credentials from amqp URL: amqp://user:pass@host:port/
+        import re
+        m = re.match(r"amqp://([^:]+):([^@]+)@([^:/]+)", rmq_url)
+        user, password, host = ("guest", "guest", "rabbitmq")
+        if m:
+            user, password, host = m.group(1), m.group(2), m.group(3)
 
-        broker = os.getenv("CELERY_BROKER_URL", settings.CELERY_BROKER_URL)
-        app = Celery(broker=broker, backend="rpc://")
+        mgmt_url = f"http://{host}:15672/api/queues/%2F"
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(mgmt_url, auth=(user, password))
+            queues = {q["name"]: q for q in res.json()} if res.status_code == 200 else {}
 
-        # Run synchronously in thread to avoid blocking the event loop
-        loop = asyncio.get_event_loop()
-
-        def _inspect():
-            insp = app.control.inspect(timeout=3)
-            pong = insp.ping() or {}
-            stats = insp.stats() or {}
-            return pong, stats
-
-        pong, stats = await loop.run_in_executor(None, _inspect)
-
-        workers = []
-        for hostname in pong:
-            wstats = stats.get(hostname, {})
-            pool = wstats.get("pool", {})
-            workers.append({
-                "name": hostname,
-                "status": "healthy",
-                "concurrency": pool.get("max-concurrency", "?"),
-                "processes": pool.get("processes", []),
-                "tasks_processed": wstats.get("total", {}),
-            })
-
-        # Add known workers that didn't respond
-        known = ["nmap", "zap", "trivy", "prowler", "metasploit"]
-        responding = {w["name"] for w in workers}
-        for k in known:
-            if not any(k in n for n in responding):
-                workers.append({"name": f"worker-{k}", "status": "unreachable", "concurrency": "?"})
-
-        return sorted(workers, key=lambda w: w["name"])
+        for name in known_queues:
+            q = queues.get(name)
+            if q is None:
+                results.append({
+                    "name": f"worker-{name}",
+                    "status": "unreachable",
+                    "error": "Queue not found in RabbitMQ",
+                })
+            else:
+                consumers = q.get("consumers", 0)
+                messages = q.get("messages", 0)
+                results.append({
+                    "name": f"worker-{name}",
+                    "status": "healthy" if consumers > 0 else "unhealthy",
+                    "concurrency": consumers,
+                    "tasks_processed": {"queued": messages},
+                    **({"error": "No consumers — worker may be down"} if consumers == 0 else {}),
+                })
     except Exception as exc:
-        return [{"name": "celery", "status": "unhealthy", "error": str(exc)}]
+        for name in known_queues:
+            results.append({"name": f"worker-{name}", "status": "unreachable", "error": str(exc)})
+
+    return results
 
 
 # ---------------------------------------------------------------------------
