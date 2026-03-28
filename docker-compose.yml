@@ -246,6 +246,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./workers/nmap/app:/app/app
+      - ./workers/base:/app/base
     networks:
       - backend-network
       - scan-network
@@ -276,6 +277,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./workers/zap/app:/app/app
+      - ./workers/base:/app/base
     networks:
       - backend-network
       - scan-network
@@ -302,6 +304,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./workers/trivy/app:/app/app
+      - ./workers/base:/app/base
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - backend-network
@@ -329,6 +332,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./workers/prowler/app:/app/app
+      - ./workers/base:/app/base
     networks:
       - backend-network
       - scan-network
@@ -355,6 +359,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./workers/metasploit/app:/app/app
+      - ./workers/base:/app/base
     networks:
       - backend-network
       - scan-network

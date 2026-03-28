@@ -245,13 +245,20 @@ if ($global:AuthToken) {
     
     $scanBody = @{
         name = "Test Scan - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-        description = "Automated test scan of localhost"
-        scan_type = "NETWORK"
-        target = "127.0.0.1"
-        scan_profile = "quick"
-        tools = @("nmap")
-        parallel_execution = $false
-    } | ConvertTo-Json
+        description = "Automated test scan of scanme.nmap.org"
+        scan_type = "network"
+        targets = @(
+            @{
+                type = "hostname"
+                value = "scanme.nmap.org"
+            }
+        )
+        options = @{
+            profile = "quick"
+            timeout = 300
+        }
+        priority = "normal"
+    } | ConvertTo-Json -Depth 4
     
     $headers = @{
         "Authorization" = "Bearer $global:AuthToken"
@@ -260,7 +267,6 @@ if ($global:AuthToken) {
     
     try {
         $scanResponse = Invoke-RestMethod -Uri "http://localhost:8000/api/v1/scans" `
-            -Method POST `
             -Body $scanBody `
             -Headers $headers
         
@@ -350,11 +356,11 @@ Pause-Test
 Write-TestHeader "Worker Services" 6
 
 Write-Info "Checking if workers are running..."
-$workersRunning = docker ps --filter "name=nmap-worker" --format "{{.Names}}"
+$workersRunning = docker ps --filter "name=vapt-worker-nmap" --format "{{.Names}}"
 
 if (-not $workersRunning) {
     Write-Info "Starting Nmap worker..."
-    docker-compose up -d nmap-worker
+    docker-compose --profile workers up -d worker-nmap
     
     Write-Info "Waiting 15 seconds for worker to start..."
     Start-Sleep -Seconds 15
@@ -363,7 +369,7 @@ if (-not $workersRunning) {
 }
 
 Write-Info "Checking worker logs..."
-docker logs --tail 20 nmap-worker
+docker logs --tail 20 vapt-worker-nmap
 
 Write-Info "`nTo start all workers, run:"
 Write-Host "docker-compose --profile workers up -d`n" -ForegroundColor Cyan
@@ -389,7 +395,7 @@ Write-Host "  6. Worker Services - Task execution" -ForegroundColor Gray
 Write-Host "`n📋 Useful Commands:" -ForegroundColor Yellow
 Write-Host "  View all containers:    docker-compose ps" -ForegroundColor Gray
 Write-Host "  View API logs:          docker logs -f vapt-api-gateway" -ForegroundColor Gray
-Write-Host "  View worker logs:       docker logs -f nmap-worker" -ForegroundColor Gray
+Write-Host "  View worker logs:       docker logs -f vapt-worker-nmap" -ForegroundColor Gray
 Write-Host "  Stop all services:      docker-compose down" -ForegroundColor Gray
 Write-Host "  Restart services:       docker-compose restart" -ForegroundColor Gray
 

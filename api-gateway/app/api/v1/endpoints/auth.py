@@ -196,12 +196,12 @@ async def get_current_user_info(
         User information
     """
     return {
-        "id": current_user.id,
-        "email": current_user.email,
+        "id": str(current_user.id),
+        "email": str(current_user.email),
         "full_name": current_user.full_name,
         "is_active": current_user.is_active,
         "is_superuser": current_user.is_superuser,
-        "tenant_id": current_user.tenant_id,
+        "tenant_id": str(current_user.tenant_id),
         "roles": current_user.role_names,
         "permissions": list(current_user.permissions)
     }

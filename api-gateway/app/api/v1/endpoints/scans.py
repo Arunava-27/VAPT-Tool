@@ -2,7 +2,7 @@
 Scan endpoints - Integrated with Orchestrator
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
@@ -24,31 +24,42 @@ from ..endpoints.dependencies import PermissionChecker
 router = APIRouter()
 
 
-# Import orchestrator (will be initialized on startup)
-orchestrator = None
-
-def get_orchestrator():
-    """Get orchestrator instance"""
-    global orchestrator
-    if orchestrator is None:
-        # Import here to avoid circular imports
-        import sys
-        import os
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../../../orchestrator'))
-        from app.services.orchestrator import ScanOrchestrator
-        orchestrator = ScanOrchestrator()
-    return orchestrator
+def dispatch_scan_task(scan_id: str, scan_type: str, target: str, options: dict):
+    """Dispatch scan to appropriate Celery worker based on scan type"""
+    from celery import Celery
+    import os
+    
+    broker = os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@rabbitmq:5672/")
+    celery_app = Celery(broker=broker, backend="rpc://")
+    
+    task_data = {
+        "scan_id": scan_id,
+        "target": target,
+        "options": options
+    }
+    
+    if scan_type == "network":
+        result = celery_app.send_task("nmap.scan", args=[task_data])
+    elif scan_type == "web":
+        result = celery_app.send_task("zap.scan", args=[task_data])
+    elif scan_type == "container":
+        result = celery_app.send_task("trivy.scan", args=[task_data])
+    elif scan_type == "cloud":
+        result = celery_app.send_task("prowler.scan", args=[task_data])
+    else:
+        result = celery_app.send_task("nmap.scan", args=[task_data])
+    
+    return result.id
 
 
 @router.post(
-    "/",
+    "",
     response_model=ScanResponse,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(PermissionChecker(["create_scans"]))]
 )
 async def create_scan(
     scan_data: ScanCreate,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -61,7 +72,7 @@ async def create_scan(
     scan = Scan(
         name=scan_data.name,
         description=scan_data.description,
-        scan_type=scan_data.scan_type,
+        scan_type=scan_data.scan_type.value,
         target=scan_data.targets[0].value if scan_data.targets else "",
         scan_config={
             "targets": [t.dict() for t in scan_data.targets],
@@ -69,54 +80,35 @@ async def create_scan(
             "priority": scan_data.priority.value
         },
         status="pending",
-        tenant_id=current_user.tenant_id,
-        created_by_id=current_user.id
+        tenant_id=str(current_user.tenant_id),
+        created_by_id=str(current_user.id)
     )
     
     db.add(scan)
     db.commit()
     db.refresh(scan)
     
-    # Create scan job and start orchestration
+    # Dispatch scan task to worker via Celery
     try:
-        orch = get_orchestrator()
-        
-        # Convert to ScanRequest
-        from orchestrator.app.models.scan_models import ScanRequest
-        scan_request = ScanRequest(
-            name=scan_data.name,
-            description=scan_data.description,
-            scan_type=scan_data.scan_type,
-            targets=scan_data.targets,
-            options=scan_data.options,
-            priority=scan_data.priority,
-            tenant_id=current_user.tenant_id,
-            user_id=current_user.id
+        options = scan_data.options.dict() if scan_data.options else {}
+        task_id = dispatch_scan_task(
+            scan_id=str(scan.id),
+            scan_type=scan_data.scan_type.value,
+            target=scan.target,
+            options=options
         )
-        
-        # Create scan job
-        scan_job = orch.create_scan(scan_request, scan.id)
-        
-        # Start scan in background
-        background_tasks.add_task(orch.start_scan, scan_job)
-        
-        # Update scan status
         scan.status = "queued"
         db.commit()
     
     except Exception as e:
         scan.status = "failed"
-        scan.error = str(e)
+        scan.error = f"Dispatch error: {str(e)}"
         db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start scan: {e}"
-        )
     
     return scan
 
 
-@router.get("/", response_model=ScanListResponse)
+@router.get("", response_model=ScanListResponse)
 async def list_scans(
     skip: int = 0,
     limit: int = 100,

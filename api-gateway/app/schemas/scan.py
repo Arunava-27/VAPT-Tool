@@ -89,7 +89,7 @@ class ScanResponse(BaseModel):
     result_summary: Optional[Dict[str, Any]]
     error: Optional[str]
     tenant_id: UUID
-    created_by_id: UUID
+    created_by_id: Optional[UUID]
     created_at: datetime
     updated_at: Optional[datetime]
     started_at: Optional[datetime]

@@ -62,7 +62,16 @@ class User(Base):
         import json
         perms = set()
         for role in self.roles:
-            role_perms = json.loads(role.permissions) if role.permissions else []
+            raw = role.permissions
+            if not raw:
+                continue
+            # SQLAlchemy/psycopg2 returns JSONB as a Python list already; handle both
+            if isinstance(raw, list):
+                role_perms = raw
+            elif isinstance(raw, str):
+                role_perms = json.loads(raw)
+            else:
+                role_perms = []
             perms.update(role_perms)
         return perms
     
