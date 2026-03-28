@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users, ai, infra
+from .endpoints import auth, scans, health, users, ai, infra, ws
 
 api_router = APIRouter()
 
@@ -44,4 +44,11 @@ api_router.include_router(
     ai.router,
     prefix="/ai",
     tags=["ai-engine"]
+)
+
+# WebSocket — real-time scan status
+api_router.include_router(
+    ws.router,
+    prefix="/ws",
+    tags=["websocket"]
 )

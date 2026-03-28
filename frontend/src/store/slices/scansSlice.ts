@@ -36,6 +36,13 @@ const scansSlice = createSlice({
       if (idx !== -1) state.scans[idx] = action.payload
       if (state.selectedScan?.id === action.payload.id) state.selectedScan = action.payload
     },
+    /** Merge partial fields from WS / status-only updates without clobbering full scan data */
+    patchScan(state, action: PayloadAction<Partial<Scan> & { id: string }>) {
+      const { id, ...fields } = action.payload
+      const idx = state.scans.findIndex((s) => s.id === id)
+      if (idx !== -1) Object.assign(state.scans[idx], fields)
+      if (state.selectedScan?.id === id) Object.assign(state.selectedScan, fields)
+    },
     setSelectedScan(state, action: PayloadAction<Scan | null>) {
       state.selectedScan = action.payload
     },
@@ -53,6 +60,6 @@ const scansSlice = createSlice({
   },
 })
 
-export const { setScans, addScan, updateScan, setSelectedScan, removeScan, setLoading, setError } =
+export const { setScans, addScan, updateScan, patchScan, setSelectedScan, removeScan, setLoading, setError } =
   scansSlice.actions
 export default scansSlice.reducer

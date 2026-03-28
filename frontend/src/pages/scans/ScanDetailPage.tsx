@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
-import { ArrowLeft, Bot, XCircle, RefreshCw, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Bot, XCircle, RefreshCw, AlertTriangle, Wifi, WifiOff } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getScan, cancelScan } from '../../api/scans'
 import { startAnalysis, getAnalysisStatus } from '../../api/ai'
@@ -11,6 +11,7 @@ import Badge from '../../components/common/Badge'
 import StatusDot from '../../components/common/StatusDot'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 import { usePolling } from '../../hooks/usePolling'
+import { useScanWebSocket } from '../../hooks/useScanWebSocket'
 import { formatDate, formatDuration, scanTypeLabel } from '../../utils/formatters'
 import type { ScanStatus } from '../../types'
 
@@ -33,7 +34,14 @@ export default function ScanDetailPage() {
 
   const isLive = scan?.status === 'running' || scan?.status === 'queued'
 
-  // Poll full scan while running to avoid overwriting fields with partial status data
+  // Prefer WebSocket; fall back to polling if WS fails
+  const [usePollingFallback, setUsePollingFallback] = useState(false)
+
+  const { connected: wsConnected } = useScanWebSocket(id, isLive && !usePollingFallback, {
+    onError: () => setUsePollingFallback(true),
+  })
+
+  // Poll full scan only when WS is unavailable
   usePolling(async () => {
     if (!id) return
     try {
@@ -41,7 +49,7 @@ export default function ScanDetailPage() {
       dispatch(updateScan(r.data))
       dispatch(setSelectedScan(r.data))
     } catch {}
-  }, 5000, isLive)
+  }, 5000, isLive && usePollingFallback)
 
   // Poll AI job
   usePolling(async () => {
@@ -113,7 +121,9 @@ export default function ScanDetailPage() {
                 <StatusDot status={scan.status as ScanStatus} />
                 <Badge type="status" value={scan.status} />
               </span>
-              {isLive && <span className="flex items-center gap-1 text-xs text-cyan-400"><RefreshCw className="w-3 h-3 animate-spin" /> Live</span>}
+              {isLive && wsConnected && <span className="flex items-center gap-1 text-xs text-cyan-400"><Wifi className="w-3 h-3" /> Live</span>}
+              {isLive && !wsConnected && usePollingFallback && <span className="flex items-center gap-1 text-xs text-amber-400"><WifiOff className="w-3 h-3" /><RefreshCw className="w-3 h-3 animate-spin" /> Polling</span>}
+              {isLive && !wsConnected && !usePollingFallback && <span className="flex items-center gap-1 text-xs text-cyan-400/50"><RefreshCw className="w-3 h-3 animate-spin" /> Connecting…</span>}
             </div>
             {scan.description && <p className="text-sm text-slate-500 mt-1">{scan.description}</p>}
           </div>
@@ -187,7 +197,12 @@ export default function ScanDetailPage() {
       {isLive && (
         <div className="flex items-center gap-3 bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-4">
           <LoadingSpinner size="sm" />
-          <p className="text-sm text-cyan-400">Scan in progress — polling every 5 seconds…</p>
+          {wsConnected
+            ? <p className="text-sm text-cyan-400">Scan in progress — receiving live updates via WebSocket…</p>
+            : usePollingFallback
+              ? <p className="text-sm text-amber-400">Scan in progress — polling every 5 seconds (WebSocket unavailable)…</p>
+              : <p className="text-sm text-cyan-400/60">Scan in progress — connecting to live stream…</p>
+          }
         </div>
       )}
     </div>
