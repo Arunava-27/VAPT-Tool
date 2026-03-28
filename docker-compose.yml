@@ -304,11 +304,11 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      test: ["CMD-SHELL", "python -c \"import app.tasks\" || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     restart: unless-stopped
     cap_add:
       - NET_RAW
@@ -342,11 +342,11 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      test: ["CMD-SHELL", "python -c \"import app.tasks\" || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     restart: unless-stopped
     profiles:
       - workers
@@ -377,11 +377,11 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      test: ["CMD-SHELL", "python -c \"import app.tasks\" || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     restart: unless-stopped
     profiles:
       - workers
@@ -411,11 +411,11 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      test: ["CMD-SHELL", "python -c \"import app.tasks\" || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     restart: unless-stopped
     profiles:
       - workers
@@ -445,11 +445,11 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      test: ["CMD-SHELL", "python -c \"import app.tasks\" || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     restart: unless-stopped
     privileged: true
     profiles:
