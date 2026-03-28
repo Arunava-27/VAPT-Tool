@@ -1,0 +1,66 @@
+{
+  "scan-results": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Principal": {"AWS": "*"},
+        "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::scan-results/*",
+        "Condition": {
+          "StringNotEquals": {
+            "aws:PrincipalArn": "arn:aws:iam:::user/vapt-service"
+          }
+        }
+      }
+    ]
+  },
+  "reports": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Principal": {"AWS": "*"},
+        "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::reports/*",
+        "Condition": {
+          "StringNotEquals": {
+            "aws:PrincipalArn": "arn:aws:iam:::user/vapt-service"
+          }
+        }
+      }
+    ]
+  },
+  "artifacts": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Principal": {"AWS": "*"},
+        "Action": ["s3:GetObject", "s3:PutObject"],
+        "Resource": "arn:aws:s3:::artifacts/*",
+        "Condition": {
+          "StringNotEquals": {
+            "aws:PrincipalArn": "arn:aws:iam:::user/vapt-service"
+          }
+        }
+      }
+    ]
+  },
+  "temp": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Principal": {"AWS": "*"},
+        "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::temp/*",
+        "Condition": {
+          "StringNotEquals": {
+            "aws:PrincipalArn": "arn:aws:iam:::user/vapt-service"
+          }
+        }
+      }
+    ]
+  }
+}

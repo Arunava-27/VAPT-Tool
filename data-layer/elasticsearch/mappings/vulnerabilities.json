@@ -1,0 +1,30 @@
+{
+  "mappings": {
+    "properties": {
+      "vuln_id": {"type": "keyword"},
+      "scan_id": {"type": "keyword"},
+      "tenant_id": {"type": "keyword"},
+      "title": {
+        "type": "text",
+        "fields": {"keyword": {"type": "keyword"}}
+      },
+      "description": {"type": "text"},
+      "severity": {"type": "keyword"},
+      "cvss_score": {"type": "float"},
+      "cwe": {"type": "keyword"},
+      "cve": {"type": "keyword"},
+      "affected_component": {
+        "type": "text",
+        "fields": {"keyword": {"type": "keyword"}}
+      },
+      "remediation": {"type": "text"},
+      "status": {"type": "keyword"},
+      "tool": {"type": "keyword"},
+      "created_at": {"type": "date"}
+    }
+  },
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  }
+}

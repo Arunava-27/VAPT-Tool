@@ -39,15 +39,17 @@ def dispatch_scan_task(scan_id: str, scan_type: str, target: str, options: dict)
     }
     
     if scan_type == "network":
-        result = celery_app.send_task("nmap.scan", args=[task_data])
+        result = celery_app.send_task("nmap.scan", args=[task_data], queue="nmap")
     elif scan_type == "web":
-        result = celery_app.send_task("zap.scan", args=[task_data])
+        result = celery_app.send_task("zap.scan", args=[task_data], queue="zap")
     elif scan_type == "container":
-        result = celery_app.send_task("trivy.scan", args=[task_data])
+        result = celery_app.send_task("trivy.scan", args=[task_data], queue="trivy")
     elif scan_type == "cloud":
-        result = celery_app.send_task("prowler.scan", args=[task_data])
+        result = celery_app.send_task("prowler.scan", args=[task_data], queue="prowler")
+    elif scan_type == "full":
+        result = celery_app.send_task("nmap.scan", args=[task_data], queue="nmap")
     else:
-        result = celery_app.send_task("nmap.scan", args=[task_data])
+        result = celery_app.send_task("nmap.scan", args=[task_data], queue="nmap")
     
     return result.id
 

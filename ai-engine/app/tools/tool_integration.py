@@ -31,6 +31,15 @@ class ToolIntegration:
         "metasploit": "metasploit.scan",
     }
 
+    # Each tool has its own dedicated queue to prevent cross-worker task leakage
+    TOOL_QUEUES = {
+        "nmap":       "nmap",
+        "zap":        "zap",
+        "trivy":      "trivy",
+        "prowler":    "prowler",
+        "metasploit": "metasploit",
+    }
+
     def dispatch(
         self,
         tool: str,
@@ -48,7 +57,7 @@ class ToolIntegration:
             "target": target,
             "options": options or {},
         }
-        result = _celery.send_task(task_name, args=[task_data])
+        result = _celery.send_task(task_name, args=[task_data], queue=self.TOOL_QUEUES[tool])
         logger.info(f"[Tools] Dispatched {tool} task {result.id} for target {target}")
         return result.id
 

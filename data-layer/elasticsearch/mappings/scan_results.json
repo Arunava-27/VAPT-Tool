@@ -1,0 +1,29 @@
+{
+  "mappings": {
+    "properties": {
+      "scan_id": {"type": "keyword"},
+      "tenant_id": {"type": "keyword"},
+      "target": {"type": "keyword"},
+      "scan_type": {"type": "keyword"},
+      "status": {"type": "keyword"},
+      "started_at": {"type": "date"},
+      "completed_at": {"type": "date"},
+      "duration_seconds": {"type": "float"},
+      "findings_count": {
+        "properties": {
+          "critical": {"type": "integer"},
+          "high": {"type": "integer"},
+          "medium": {"type": "integer"},
+          "low": {"type": "integer"},
+          "total": {"type": "integer"}
+        }
+      },
+      "tools_used": {"type": "keyword"},
+      "result_summary": {"type": "object", "enabled": false}
+    }
+  },
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  }
+}

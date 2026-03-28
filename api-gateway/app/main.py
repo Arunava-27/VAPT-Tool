@@ -27,8 +27,8 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     description="VAPT Platform - AI-Driven Security Testing Platform",
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url="/redoc" if settings.DEBUG else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
     openapi_url=f"{settings.API_V1_PREFIX}/openapi.json"
 )
 

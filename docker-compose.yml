@@ -109,6 +109,35 @@ services:
   # Core Services
   # =============================================================================
 
+  data-layer-init:
+    build:
+      context: ./data-layer
+      dockerfile: Dockerfile
+    container_name: vapt-data-init
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-vapt_user}:${POSTGRES_PASSWORD:-changeme123}@postgres:5432/${POSTGRES_DB:-vapt_platform}
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - ./api-gateway/alembic:/app/alembic
+      - ./api-gateway/alembic.ini:/app/alembic.ini
+    networks:
+      - backend-network
+      - data-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: "no"
+    profiles:
+      - init
+      - api
+
   api-gateway:
     build:
       context: ./api-gateway
@@ -131,6 +160,27 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - AI_ENGINE_URL=http://ai-engine:8001
+    volumes:
+      - ./api-gateway:/app
+    networks:
+      - frontend-network
+      - backend-network
+      - data-network
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -234,6 +284,7 @@ services:
       context: ./workers/nmap
       dockerfile: Dockerfile
     container_name: vapt-worker-nmap
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=4", "-Q", "nmap"]
     environment:
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
       - CELERY_RESULT_BACKEND=rpc://
@@ -252,6 +303,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.celery_app", "inspect", "ping", "-d", "celery@nmap-worker", "--timeout", "5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
     cap_add:
       - NET_RAW
@@ -264,6 +321,7 @@ services:
       context: ./workers/zap
       dockerfile: Dockerfile
     container_name: vapt-worker-zap
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=2", "-Q", "zap"]
     environment:
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
       - CELERY_RESULT_BACKEND=rpc://
@@ -292,6 +350,7 @@ services:
       context: ./workers/trivy
       dockerfile: Dockerfile
     container_name: vapt-worker-trivy
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=2", "-Q", "trivy"]
     environment:
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
       - CELERY_RESULT_BACKEND=rpc://
@@ -320,6 +379,7 @@ services:
       context: ./workers/prowler
       dockerfile: Dockerfile
     container_name: vapt-worker-prowler
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=1", "-Q", "prowler"]
     environment:
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
       - CELERY_RESULT_BACKEND=rpc://
@@ -347,6 +407,7 @@ services:
       context: ./workers/metasploit
       dockerfile: Dockerfile
     container_name: vapt-worker-metasploit
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=1", "-Q", "metasploit"]
     environment:
       - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
       - CELERY_RESULT_BACKEND=rpc://

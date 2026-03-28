@@ -41,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD celery -A app.tasks inspect ping -d celery@$HOSTNAME || exit 1
 
 # Run celery worker
-CMD ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=2"]
+CMD ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=2", "-Q", "zap"]

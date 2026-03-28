@@ -6,6 +6,10 @@ from .user import User
 from .tenant import Tenant
 from .role import Role, user_roles, SYSTEM_ROLES
 from .scan import Scan, ScanStatus, ScanType
+from .vulnerability import Vulnerability
+from .report import Report
+from .audit_log import AuditLog
+from .scan_finding import ScanFinding
 
 __all__ = [
     "User",
@@ -15,5 +19,9 @@ __all__ = [
     "SYSTEM_ROLES",
     "Scan",
     "ScanStatus",
-    "ScanType"
+    "ScanType",
+    "Vulnerability",
+    "Report",
+    "AuditLog",
+    "ScanFinding",
 ]
