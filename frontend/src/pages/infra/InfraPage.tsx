@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { RefreshCw, Database, Layers, Cpu, HardDrive, Server, Bot, Radio, CheckCircle, XCircle, AlertTriangle, Clock } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getServicesHealth } from '../../api/infra'
@@ -172,18 +172,21 @@ export default function InfraPage() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [selectedSvc, setSelectedSvc] = useState<ServiceHealth | null>(null)
 
+  const hasData = useRef(false)
+
   const fetchHealth = useCallback(async () => {
     try {
       const res = await getServicesHealth()
       setData(res.data)
+      hasData.current = true
       setLastChecked(new Date())
     } catch (err) {
       console.error('Services health check failed:', err)
-      if (!data) toast.error('Failed to fetch service health')
+      if (!hasData.current) toast.error('Failed to fetch service health')
     } finally {
       setLoading(false)
     }
-  }, [data])
+  }, [])
 
   usePolling(fetchHealth, 15_000, autoRefresh)
 

@@ -37,6 +37,7 @@ def zap_scan(self, task_data):
     spider_config = task_data.get("spider_config", {})
     scan_config = task_data.get("scan_config", {})
     options = task_data.get("options", {})
+    scan_id = task_data.get("scan_id")
     
     start_time = time.time()
     
@@ -49,6 +50,8 @@ def zap_scan(self, task_data):
             raise TaskError("Target must be a valid HTTP(S) URL", ErrorCategory.INVALID_INPUT)
         
         base_task.log_start(self.request.id, target, "zap")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "running")
         base_task.log_progress(self.request.id, f"Scan type: {scan_type}", "zap")
         
         # Run ZAP scan with retry logic
@@ -99,11 +102,15 @@ def zap_scan(self, task_data):
         if not base_task.validate_result(result):
             raise TaskError("Result validation failed", ErrorCategory.TOOL_ERROR)
         
+        if scan_id:
+            base_task.update_scan_status(scan_id, "completed", standardized_result.get('summary', {}))
         base_task.log_success(self.request.id, duration, "zap")
         return result
     
     except TaskError as e:
         base_task.log_error(self.request.id, e, e.category, "zap")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',
@@ -121,6 +128,8 @@ def zap_scan(self, task_data):
     except Exception as e:
         category = base_task.categorize_error(e)
         base_task.log_error(self.request.id, e, category, "zap")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',

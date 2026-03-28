@@ -159,18 +159,23 @@ class TaskDispatcher:
         # Build Celery task signatures
         for worker_task in scan_job.worker_tasks:
             task_name = f"{worker_task.worker_type.value}.scan"
-            
+            queue_name = worker_task.worker_type.value
+
+            task_data = {
+                "scan_id": str(scan_job.id),
+                "worker_task_id": str(worker_task.id),
+                "target": worker_task.target.value,
+                "target_type": worker_task.target.type,
+                "ports": worker_task.target.ports,
+                "options": worker_task.options,
+            }
+
             # Import and create task signature
             celery_task = celery_app.signature(
                 task_name,
-                args=[],
-                kwargs={
-                    'scan_job_id': str(scan_job.id),
-                    'worker_task_id': str(worker_task.id),
-                    'target': worker_task.target.dict(),
-                    'options': worker_task.options
-                },
-                immutable=True
+                args=[task_data],
+                immutable=True,
+                queue=queue_name
             )
             
             celery_tasks.append(celery_task)
@@ -207,16 +212,22 @@ class TaskDispatcher:
         
         for worker_task in scan_job.worker_tasks:
             task_name = f"{worker_task.worker_type.value}.scan"
-            
+            queue_name = worker_task.worker_type.value
+
+            task_data = {
+                "scan_id": str(scan_job.id),
+                "worker_task_id": str(worker_task.id),
+                "target": worker_task.target.value,
+                "target_type": worker_task.target.type,
+                "ports": worker_task.target.ports,
+                "options": worker_task.options,
+            }
+
             # Send task to queue
             result = celery_app.send_task(
                 task_name,
-                kwargs={
-                    'scan_job_id': str(scan_job.id),
-                    'worker_task_id': str(worker_task.id),
-                    'target': worker_task.target.dict(),
-                    'options': worker_task.options
-                }
+                args=[task_data],
+                queue=queue_name
             )
             
             task_ids.append(result.id)

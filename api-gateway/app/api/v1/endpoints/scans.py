@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ....db.session import get_db
 from .auth import get_current_active_user
@@ -23,35 +23,53 @@ from ..endpoints.dependencies import PermissionChecker
 
 router = APIRouter()
 
+# Module-level singleton — created once, reused for all dispatch calls
+_celery_app = None
 
-def dispatch_scan_task(scan_id: str, scan_type: str, target: str, options: dict):
-    """Dispatch scan to appropriate Celery worker based on scan type"""
-    from celery import Celery
-    import os
-    
-    broker = os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@rabbitmq:5672/")
-    celery_app = Celery(broker=broker, backend="rpc://")
+
+def _get_celery_app():
+    """Return the shared Celery app, creating it once on first use."""
+    global _celery_app
+    if _celery_app is None:
+        from celery import Celery
+        import os
+        broker = os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@rabbitmq:5672/")
+        _celery_app = Celery(broker=broker, backend="rpc://")
+    return _celery_app
+
+
+def dispatch_scan_task(scan_id: str, scan_type: str, target: str, options: dict) -> list[str]:
+    """Dispatch scan to appropriate Celery worker(s) based on scan type.
+
+    Returns a list of dispatched Celery task IDs (multiple for full/comprehensive).
+    """
+    celery_app = _get_celery_app()
     
     task_data = {
         "scan_id": scan_id,
         "target": target,
         "options": options
     }
-    
-    if scan_type == "network":
-        result = celery_app.send_task("nmap.scan", args=[task_data], queue="nmap")
-    elif scan_type == "web":
-        result = celery_app.send_task("zap.scan", args=[task_data], queue="zap")
-    elif scan_type == "container":
-        result = celery_app.send_task("trivy.scan", args=[task_data], queue="trivy")
-    elif scan_type == "cloud":
-        result = celery_app.send_task("prowler.scan", args=[task_data], queue="prowler")
-    elif scan_type == "full":
-        result = celery_app.send_task("nmap.scan", args=[task_data], queue="nmap")
-    else:
-        result = celery_app.send_task("nmap.scan", args=[task_data], queue="nmap")
-    
-    return result.id
+
+    # Map scan type → list of (task_name, queue) tuples
+    DISPATCH_MAP = {
+        "network":      [("nmap.scan",     "nmap")],
+        "web":          [("zap.scan",      "zap"), ("nmap.scan", "nmap")],
+        "container":    [("trivy.scan",    "trivy")],
+        "cloud":        [("prowler.scan",  "prowler")],
+        "full":         [("nmap.scan", "nmap"), ("zap.scan", "zap"),
+                         ("trivy.scan", "trivy"), ("prowler.scan", "prowler")],
+        "comprehensive":[("nmap.scan", "nmap"), ("zap.scan", "zap"),
+                         ("trivy.scan", "trivy"), ("prowler.scan", "prowler")],
+    }
+
+    targets = DISPATCH_MAP.get(scan_type, [("nmap.scan", "nmap")])
+    task_ids = []
+    for task_name, queue in targets:
+        result = celery_app.send_task(task_name, args=[task_data], queue=queue)
+        task_ids.append(result.id)
+
+    return task_ids
 
 
 @router.post(
@@ -93,7 +111,7 @@ async def create_scan(
     # Dispatch scan task to worker via Celery
     try:
         options = scan_data.options.dict() if scan_data.options else {}
-        task_id = dispatch_scan_task(
+        dispatch_scan_task(
             scan_id=str(scan.id),
             scan_type=scan_data.scan_type.value,
             target=scan.target,
@@ -231,7 +249,7 @@ async def cancel_scan(
         )
 
     scan.status = "cancelled"
-    scan.completed_at = datetime.now()
+    scan.completed_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(scan)
 

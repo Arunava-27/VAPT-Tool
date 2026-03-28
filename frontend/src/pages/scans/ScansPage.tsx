@@ -33,7 +33,10 @@ export default function ScansPage() {
     listScans({ limit: 200 }).then((r) => {
       const scans = r.data?.scans ?? []
       dispatch(setScans({ scans, total: r.data?.total ?? scans.length }))
-    }).catch(() => {})
+    }).catch((err) => {
+      console.error('Failed to load scans:', err)
+      toast.error('Failed to load scans')
+    })
   }, [dispatch])
 
   const filtered = scans

@@ -39,6 +39,7 @@ def nmap_scan(self, task_data):
     profile = task_data.get("profile", "quick")
     ports = task_data.get("ports")
     options = task_data.get("options", {})
+    scan_id = task_data.get("scan_id")
     
     start_time = time.time()
     
@@ -48,6 +49,8 @@ def nmap_scan(self, task_data):
             raise TaskError("Target is required", ErrorCategory.INVALID_INPUT)
         
         base_task.log_start(self.request.id, target, "nmap")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "running")
         base_task.log_progress(self.request.id, f"Using profile: {profile}", "nmap")
         
         # Step 1: Run scan with retry logic
@@ -94,12 +97,16 @@ def nmap_scan(self, task_data):
         if not base_task.validate_result(result):
             raise TaskError("Result validation failed", ErrorCategory.TOOL_ERROR)
         
+        if scan_id:
+            base_task.update_scan_status(scan_id, "completed", standardized_result.get('summary', {}))
         base_task.log_success(self.request.id, duration, "nmap")
         return result
     
     except TaskError as e:
         # Categorized error
         base_task.log_error(self.request.id, e, e.category, "nmap")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',
@@ -118,6 +125,8 @@ def nmap_scan(self, task_data):
         # Uncategorized error
         category = base_task.categorize_error(e)
         base_task.log_error(self.request.id, e, category, "nmap")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',

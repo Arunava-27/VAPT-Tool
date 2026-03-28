@@ -5,7 +5,7 @@ Authentication endpoints
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from ....db.session import get_db
@@ -73,9 +73,7 @@ async def get_current_user(
 async def get_current_active_user(
     current_user: User = Depends(get_current_user)
 ) -> User:
-    """Get current active user"""
-    if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+    """Get current active user (is_active already enforced by get_current_user)"""
     return current_user
 
 
@@ -113,8 +111,8 @@ async def login(
         )
     
     # Update last login
-    user.last_login = datetime.now()
-    user.login_count = str(int(user.login_count) + 1)
+    user.last_login = datetime.now(timezone.utc)
+    user.login_count = (user.login_count or 0) + 1
     db.commit()
     
     # Create tokens

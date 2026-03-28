@@ -4,7 +4,7 @@ Tenant model for multi-tenancy support
 
 from sqlalchemy import Column, String, Boolean, DateTime, Text
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from ..db.session import Base
@@ -41,8 +41,8 @@ class Tenant(Base):
     max_concurrent_scans = Column(String(5), default="5")
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     # Relationships
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")

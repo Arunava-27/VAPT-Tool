@@ -4,7 +4,7 @@ Scan model for security scan jobs
 
 from sqlalchemy import Column, String, DateTime, Text, ForeignKey, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import enum
 
@@ -28,6 +28,8 @@ class ScanType(str, enum.Enum):
     CONTAINER = "container"
     CLOUD = "cloud"
     CUSTOM = "custom"
+    FULL = "full"
+    COMPREHENSIVE = "comprehensive"
 
 
 class Scan(Base):
@@ -61,8 +63,8 @@ class Scan(Base):
     created_by_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     

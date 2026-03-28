@@ -33,7 +33,9 @@ export default function DashboardPage() {
     listScans({ limit: 100 }).then((r) => {
       const scans = r.data?.scans ?? []
       dispatch(setScans({ scans, total: r.data?.total ?? scans.length }))
-    }).catch(() => {})
+    }).catch((err) => {
+      console.error('Failed to load dashboard scans:', err)
+    })
   }, [dispatch])
 
   const total = scans.length

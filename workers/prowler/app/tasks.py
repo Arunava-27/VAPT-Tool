@@ -39,11 +39,14 @@ def prowler_scan(self, task_data):
     severity = task_data.get("severity", ["critical", "high"])
     credentials = task_data.get("credentials", {})
     options = task_data.get("options", {})
+    scan_id = task_data.get("scan_id")
     
     start_time = time.time()
     
     try:
         base_task.log_start(self.request.id, f"{cloud_provider}:{target}", "prowler")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "running")
         base_task.log_progress(self.request.id, f"Scanning {cloud_provider.upper()}", "prowler")
         
         # Run Prowler scan with retry logic
@@ -94,11 +97,15 @@ def prowler_scan(self, task_data):
         if not base_task.validate_result(result):
             raise TaskError("Result validation failed", ErrorCategory.TOOL_ERROR)
         
+        if scan_id:
+            base_task.update_scan_status(scan_id, "completed", standardized_result.get('summary', {}))
         base_task.log_success(self.request.id, duration, "prowler")
         return result
     
     except TaskError as e:
         base_task.log_error(self.request.id, e, e.category, "prowler")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',
@@ -116,6 +123,8 @@ def prowler_scan(self, task_data):
     except Exception as e:
         category = base_task.categorize_error(e)
         base_task.log_error(self.request.id, e, category, "prowler")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',

@@ -33,6 +33,7 @@ def metasploit_scan(self, task_data):
     target = task_data.get("target")
     scan_type = task_data.get("scan_type", "verify")
     options = task_data.get("options", {})
+    scan_id = task_data.get("scan_id")
     
     start_time = time.time()
     
@@ -41,6 +42,8 @@ def metasploit_scan(self, task_data):
             raise TaskError("Target is required", ErrorCategory.INVALID_INPUT)
         
         base_task.log_start(self.request.id, target, "metasploit")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "running")
         base_task.log_progress(self.request.id, f"Scan type: {scan_type}", "metasploit")
         
         # Safety check for exploit mode
@@ -89,11 +92,15 @@ def metasploit_scan(self, task_data):
         if not base_task.validate_result(result):
             raise TaskError("Result validation failed", ErrorCategory.TOOL_ERROR)
         
+        if scan_id:
+            base_task.update_scan_status(scan_id, "completed", standardized_result.get('summary', {}))
         base_task.log_success(self.request.id, duration, "metasploit")
         return result
     
     except TaskError as e:
         base_task.log_error(self.request.id, e, e.category, "metasploit")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',
@@ -111,6 +118,8 @@ def metasploit_scan(self, task_data):
     except Exception as e:
         category = base_task.categorize_error(e)
         base_task.log_error(self.request.id, e, category, "metasploit")
+        if scan_id:
+            base_task.update_scan_status(scan_id, "failed", error=str(e))
         
         return base_task.create_result(
             status='failed',

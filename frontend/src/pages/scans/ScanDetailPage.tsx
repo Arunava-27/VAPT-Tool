@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useDispatch, useSelector } from 'react-redux'
 import { ArrowLeft, Bot, XCircle, RefreshCw, AlertTriangle } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { getScan, getScanStatus, cancelScan } from '../../api/scans'
+import { getScan, cancelScan } from '../../api/scans'
 import { startAnalysis, getAnalysisStatus } from '../../api/ai'
 import { setSelectedScan, updateScan } from '../../store/slices/scansSlice'
 import type { RootState } from '../../store'
@@ -33,11 +33,11 @@ export default function ScanDetailPage() {
 
   const isLive = scan?.status === 'running' || scan?.status === 'queued'
 
-  // Poll status while running
+  // Poll full scan while running to avoid overwriting fields with partial status data
   usePolling(async () => {
     if (!id) return
     try {
-      const r = await getScanStatus(id)
+      const r = await getScan(id)
       dispatch(updateScan(r.data))
       dispatch(setSelectedScan(r.data))
     } catch {}

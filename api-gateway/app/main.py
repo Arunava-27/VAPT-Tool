@@ -9,7 +9,7 @@ import logging
 
 from .core.config import settings
 from .api.v1.api import api_router
-from .db.session import init_db
+from .db.session import init_db, SessionLocal
 from .middleware.tenant import TenantContextMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 
@@ -73,11 +73,26 @@ async def root():
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint — probes DB connectivity"""
+    from sqlalchemy import text
+    import asyncio
+
+    db_status = "healthy"
+    try:
+        db = SessionLocal()
+        try:
+            await asyncio.to_thread(db.execute, text("SELECT 1"))
+        finally:
+            db.close()
+    except Exception as exc:
+        db_status = f"unhealthy: {exc}"
+
+    overall = "healthy" if db_status == "healthy" else "degraded"
     return {
-        "status": "healthy",
+        "status": overall,
         "version": settings.APP_VERSION,
-        "environment": settings.ENVIRONMENT
+        "environment": settings.ENVIRONMENT,
+        "database": db_status,
     }
 
 

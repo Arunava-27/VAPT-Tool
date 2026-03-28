@@ -4,7 +4,7 @@ ScanFinding model — denormalised findings table for fast querying and AI analy
 
 from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from ..db.session import Base
@@ -33,7 +33,7 @@ class ScanFinding(Base):
     raw_data = Column(JSONB, nullable=True)
     ai_analysis = Column(JSONB, nullable=True)
     tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     def __repr__(self) -> str:
         return f"<ScanFinding(id={self.id}, tool={self.tool!r}, severity={self.severity})>"

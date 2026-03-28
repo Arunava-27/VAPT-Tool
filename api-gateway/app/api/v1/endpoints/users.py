@@ -162,6 +162,11 @@ async def update_user(
     
     # Update fields
     update_data = user_data.dict(exclude_unset=True)
+
+    # Only superusers may toggle is_active or is_superuser
+    if not current_user.is_superuser:
+        update_data.pop("is_active", None)
+        update_data.pop("is_superuser", None)
     
     if "password" in update_data:
         update_data["hashed_password"] = hash_password(update_data.pop("password"))

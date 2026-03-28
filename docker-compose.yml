@@ -35,7 +35,7 @@ services:
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis123}", "--no-auth-warning", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -304,7 +304,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.celery_app", "inspect", "ping", "-d", "celery@nmap-worker", "--timeout", "5"]
+      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -341,6 +341,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
     profiles:
       - workers
@@ -370,6 +376,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
     profiles:
       - workers
@@ -398,6 +410,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
     profiles:
       - workers
@@ -426,6 +444,12 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.tasks", "inspect", "ping", "--timeout", "5"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
     privileged: true
     profiles:
@@ -451,7 +475,8 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - api-gateway
+      api-gateway:
+        condition: service_healthy
     restart: unless-stopped
     profiles:
       - frontend

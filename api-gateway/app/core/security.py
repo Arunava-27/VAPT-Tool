@@ -2,7 +2,7 @@
 Security utilities for authentication and authorization
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 import bcrypt
@@ -59,13 +59,13 @@ class SecurityUtils:
         to_encode = data.copy()
         
         if expires_delta:
-            expire = datetime.now() + expires_delta
+            expire = datetime.now(timezone.utc) + expires_delta
         else:
-            expire = datetime.now() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+            expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         
         to_encode.update({
             "exp": expire,
-            "iat": datetime.now(),
+            "iat": datetime.now(timezone.utc),
             "type": "access"
         })
         
@@ -89,11 +89,11 @@ class SecurityUtils:
             Encoded JWT refresh token
         """
         to_encode = data.copy()
-        expire = datetime.now() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         
         to_encode.update({
             "exp": expire,
-            "iat": datetime.now(),
+            "iat": datetime.now(timezone.utc),
             "type": "refresh"
         })
         

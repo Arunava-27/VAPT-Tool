@@ -15,8 +15,9 @@ export function useScans() {
       dispatch(setLoading(true));
       try {
         const response = await listScans(params);
-        const data = Array.isArray(response.data) ? response.data : [];
-        dispatch(setScans({ scans: data, total: data.length }));
+        const scans = response.data?.scans ?? [];
+        const total = response.data?.total ?? scans.length;
+        dispatch(setScans({ scans, total }));
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to fetch scans';
         dispatch(setError(message));

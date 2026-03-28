@@ -14,10 +14,10 @@ export function useAuth() {
 
   const login = async (email: string, password: string) => {
     const response = await loginApi(email, password);
-    const { access_token } = response.data;
-    dispatch(setCredentials({ accessToken: access_token }));
+    const { access_token, refresh_token } = response.data;
+    dispatch(setCredentials({ accessToken: access_token, refreshToken: refresh_token ?? null }));
     const meResponse = await getMe();
-    dispatch(setCredentials({ accessToken: access_token, user: meResponse.data }));
+    dispatch(setCredentials({ accessToken: access_token, refreshToken: refresh_token ?? null, user: meResponse.data }));
     navigate('/dashboard');
   };
 

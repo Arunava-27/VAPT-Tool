@@ -4,7 +4,7 @@ AuditLog model for compliance and security event tracking.
 
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..db.session import Base
 
@@ -27,7 +27,7 @@ class AuditLog(Base):
     details = Column(JSONB, default=dict, nullable=True)
     ip_address = Column(String(45), nullable=True)
     user_agent = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.now, nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
     def __repr__(self) -> str:
         return f"<AuditLog(id={self.id}, action={self.action!r}, user_id={self.user_id})>"

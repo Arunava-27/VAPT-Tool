@@ -13,7 +13,7 @@ const initialState: AuthState = {
   user: null,
   accessToken: localStorage.getItem('access_token'),
   refreshToken: localStorage.getItem('refresh_token'),
-  isAuthenticated: !!localStorage.getItem('access_token'),
+  isAuthenticated: false,  // always false until validated via /me on app load
   isLoading: false,
 }
 

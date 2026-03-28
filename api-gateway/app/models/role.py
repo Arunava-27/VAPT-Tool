@@ -4,7 +4,7 @@ Role model for RBAC (Role-Based Access Control)
 
 from sqlalchemy import Column, String, Boolean, DateTime, Text, Table, ForeignKey
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 
 from ..db.session import Base
@@ -40,8 +40,8 @@ class Role(Base):
     is_system_role = Column(Boolean, default=False, nullable=False)  # System roles can't be deleted
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     # Relationships
     users = relationship("User", secondary=user_roles, back_populates="roles")

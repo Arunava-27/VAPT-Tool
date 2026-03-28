@@ -1,6 +1,9 @@
+import json
 import logging
+import os
 import time
 import signal
+import concurrent.futures
 from typing import Any, Dict, Optional, Callable
 from functools import wraps
 from enum import Enum
@@ -65,6 +68,93 @@ class BaseTask:
     def should_shutdown(self) -> bool:
         """Check if shutdown has been requested"""
         return self._shutdown_requested
+
+    # =========================================================================
+    # Database Write-back (BUG-01)
+    # =========================================================================
+
+    def _get_db_session(self):
+        """Create a SQLAlchemy session using DATABASE_URL env var"""
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            logger.warning("DATABASE_URL not set — scan status updates disabled")
+            return None
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            engine = create_engine(database_url)
+            Session = sessionmaker(bind=engine)
+            return Session()
+        except Exception as exc:
+            logger.error(f"Failed to create DB session: {exc}")
+            return None
+
+    def update_scan_status(
+        self,
+        scan_id: str,
+        status: str,
+        result_summary: Optional[Dict] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """
+        Write scan status back to the database.
+
+        Called by workers to reflect running / completed / failed state.
+        """
+        from datetime import datetime
+        from sqlalchemy import text
+
+        session = self._get_db_session()
+        if not session:
+            return
+        try:
+            now = datetime.utcnow()
+            if status == "running":
+                session.execute(
+                    text(
+                        "UPDATE scans SET status = :status, started_at = :started_at,"
+                        " updated_at = :updated_at WHERE id = :scan_id"
+                    ),
+                    {"status": status, "started_at": now, "updated_at": now, "scan_id": scan_id},
+                )
+            elif status == "completed":
+                session.execute(
+                    text(
+                        "UPDATE scans SET status = :status,"
+                        " result_summary = CAST(:result_summary AS JSONB),"
+                        " completed_at = :completed_at, updated_at = :updated_at"
+                        " WHERE id = :scan_id"
+                    ),
+                    {
+                        "status": status,
+                        "result_summary": json.dumps(result_summary or {}),
+                        "completed_at": now,
+                        "updated_at": now,
+                        "scan_id": scan_id,
+                    },
+                )
+            elif status == "failed":
+                session.execute(
+                    text(
+                        "UPDATE scans SET status = :status, error = :error,"
+                        " completed_at = :completed_at, updated_at = :updated_at"
+                        " WHERE id = :scan_id"
+                    ),
+                    {
+                        "status": status,
+                        "error": error or "",
+                        "completed_at": now,
+                        "updated_at": now,
+                        "scan_id": scan_id,
+                    },
+                )
+            session.commit()
+            logger.info(f"Updated scan {scan_id} status → {status}")
+        except Exception as exc:
+            logger.error(f"Failed to update scan {scan_id} status: {exc}")
+            session.rollback()
+        finally:
+            session.close()
     
     # =========================================================================
     # Logging Methods
@@ -281,37 +371,36 @@ class BaseTask:
     # Timeout Handling
     # =========================================================================
     
-    def with_timeout(self, func: Callable, timeout: Optional[int] = None, 
+    def with_timeout(self, func: Callable, timeout: Optional[int] = None,
                      task_id: str = "", tool: str = "", *args, **kwargs) -> Any:
         """
-        Execute function with timeout
-        
-        Note: This is a simple timeout wrapper. For production, consider using
-        signal.alarm (Unix) or threading.Timer (cross-platform)
-        
+        Execute function with actual timeout enforcement via ThreadPoolExecutor.
+
         Args:
             func: Function to execute
             timeout: Timeout in seconds (default: self.DEFAULT_TIMEOUT)
             task_id: Task ID for logging
             tool: Tool name for logging
             *args, **kwargs: Arguments to pass to func
-        
+
         Returns:
             Function result
-        
+
         Raises:
             TaskError: If timeout exceeded
         """
         timeout = timeout or self.DEFAULT_TIMEOUT
-        
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        elapsed = time.time() - start_time
-        
-        if elapsed > timeout:
-            raise TaskError(
-                f"Task exceeded timeout of {timeout}s",
-                category=ErrorCategory.TIMEOUT
-            )
-        
-        return result
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(func, *args, **kwargs)
+            try:
+                return future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                tool_str = f"[{tool}] " if tool else ""
+                logger.error(
+                    f"{tool_str}[{task_id}] Task timed out after {timeout}s"
+                )
+                raise TaskError(
+                    f"Task exceeded timeout of {timeout}s",
+                    category=ErrorCategory.TIMEOUT,
+                )

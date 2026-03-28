@@ -41,7 +41,7 @@ def _rmq_creds():
 async def probe_postgres(db: Session) -> Dict[str, Any]:
     t = time.monotonic()
     try:
-        db.execute(text("SELECT 1"))
+        await asyncio.to_thread(db.execute, text("SELECT 1"))
         return {"status": "healthy", "latency_ms": round((time.monotonic() - t) * 1000, 1)}
     except Exception as exc:
         return {"status": "unhealthy", "error": str(exc)}
