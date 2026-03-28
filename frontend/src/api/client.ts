@@ -2,7 +2,9 @@ import axios from 'axios'
 import { store } from '../store'
 import { logout, setCredentials } from '../store/slices/authSlice'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+// Empty string → use relative URLs (nginx proxies /api/ and /api/v1/ws/)
+// Non-empty → direct to the specified host (local dev)
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 const apiClient = axios.create({
   baseURL: BASE_URL,

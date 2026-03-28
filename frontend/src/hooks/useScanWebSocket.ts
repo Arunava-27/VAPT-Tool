@@ -14,12 +14,21 @@ import { store } from '../store'
 import { patchScan } from '../store/slices/scansSlice'
 import type { Scan } from '../types'
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+// When BASE_URL is empty, derive WebSocket URL from current browser location
+// so it works transparently through nginx proxy
+const _HTTP_BASE = import.meta.env.VITE_API_BASE_URL || ''
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
 
-// Convert http(s):// → ws(s)://
 function wsUrl(scanId: string, token: string): string {
-  const base = BASE_URL.replace(/^http/, 'ws')
+  let base: string
+  if (_HTTP_BASE) {
+    // Dev mode: convert http(s):// → ws(s)://
+    base = _HTTP_BASE.replace(/^http/, 'ws')
+  } else {
+    // Container mode: use browser's own host with same protocol converted
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    base = `${proto}//${window.location.host}`
+  }
   return `${base}/api/v1/ws/scans/${scanId}?token=${encodeURIComponent(token)}`
 }
 
