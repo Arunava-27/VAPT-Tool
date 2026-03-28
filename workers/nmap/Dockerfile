@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
 
 # Copy application code
 COPY app/ app/
-COPY ../base/ /app/base/
+# base/ is provided at runtime via volume mount (./workers/base:/app/base)
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

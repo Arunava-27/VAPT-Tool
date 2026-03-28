@@ -3,7 +3,7 @@ import time
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'base'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'base'))
 
 from .config import celery_app
 from .scanner import run_prowler_scan

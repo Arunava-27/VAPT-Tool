@@ -1,10 +1,6 @@
-"""
-API v1 router - aggregates all endpoint routers
-"""
-
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users
+from .endpoints import auth, scans, health, users, ai
 
 api_router = APIRouter()
 
@@ -34,4 +30,11 @@ api_router.include_router(
     scans.router,
     prefix="/scans",
     tags=["scans"]
+)
+
+# AI Engine (proxy)
+api_router.include_router(
+    ai.router,
+    prefix="/ai",
+    tags=["ai-engine"]
 )

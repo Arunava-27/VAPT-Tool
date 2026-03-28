@@ -1,12 +1,6 @@
 # Production Dockerfile for Prowler worker
+# Prowler is a pure Python tool — no system packages needed
 FROM python:3.11-slim
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN groupadd -r prowlerworker && useradd -r -g prowlerworker prowlerworker
@@ -20,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY app/ app/
-COPY ../base/ /app/base/
+# base/ is provided at runtime via volume mount (./workers/base:/app/base)
 
 # Set environment
 ENV PYTHONUNBUFFERED=1

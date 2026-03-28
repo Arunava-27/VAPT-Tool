@@ -1,17 +1,13 @@
 # Production Dockerfile for Metasploit worker
 FROM metasploitframework/metasploit-framework:latest as msf-base
 
-# Build stage
+# Build stage — python:3.11-slim already has ca-certificates
 FROM python:3.11-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    ca-certificates \
-    postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+# Copy Metasploit framework from base image (msfconsole lives inside the framework dir)
+COPY --from=msf-base /usr/src/metasploit-framework /usr/src/metasploit-framework
 
-# Create non-root user (but Metasploit may need elevated permissions)
+# Create non-root user
 RUN groupadd -r msfworker && useradd -r -g msfworker msfworker
 
 # Set working directory
@@ -23,12 +19,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY app/ app/
-COPY ../base/ /app/base/
+# base/ is provided at runtime via volume mount (./workers/base:/app/base)
 
 # Set environment
 ENV PYTHONUNBUFFERED=1
 ENV MSF_RPC_HOST=127.0.0.1
 ENV MSF_RPC_PORT=55553
+ENV MSF_PATH=/usr/src/metasploit-framework
 
 # Change ownership
 RUN chown -R msfworker:msfworker /app
