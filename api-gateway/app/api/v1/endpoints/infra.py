@@ -491,8 +491,14 @@ async def run_service_action(
     # ── PostgreSQL ──────────────────────────────────────────────────────────
     if service_id == "postgres":
         if action == "analyze":
-            db.execute(text("VACUUM ANALYZE"))
-            db.commit()
+            # VACUUM cannot run inside a transaction block — use raw autocommit connection
+            raw_conn = db.connection().connection
+            old_level = raw_conn.isolation_level
+            raw_conn.set_isolation_level(0)  # AUTOCOMMIT
+            try:
+                raw_conn.cursor().execute("VACUUM ANALYZE")
+            finally:
+                raw_conn.set_isolation_level(old_level)
             return {"ok": True, "message": "VACUUM ANALYZE completed successfully"}
         elif action == "test":
             db.execute(text("SELECT 1"))
