@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users, ai
+from .endpoints import auth, scans, health, users, ai, infra
 
 api_router = APIRouter()
 
@@ -9,6 +9,13 @@ api_router.include_router(
     health.router,
     prefix="/health",
     tags=["health"]
+)
+
+# Infrastructure / services monitor
+api_router.include_router(
+    infra.router,
+    prefix="/health",
+    tags=["infrastructure"]
 )
 
 # Authentication

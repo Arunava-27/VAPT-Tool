@@ -176,37 +176,30 @@ async def get_scan_status(
         Scan.id == scan_id,
         Scan.tenant_id == current_user.tenant_id
     ).first()
-    
+
     if not scan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scan not found"
         )
-    
-    # Get live status from orchestrator if scan is active
-    live_status = None
-    if scan.status in ['queued', 'preparing', 'scanning', 'analyzing', 'aggregating']:
-        try:
-            orch = get_orchestrator()
-            live_status = orch.get_scan_status(scan.id)
-        except:
-            pass
-    
+
+    result_summary = scan.result_summary or {}
+
     return {
         "id": scan.id,
         "status": scan.status,
-        "progress_percentage": live_status.get('progress_percentage', 0) if live_status else 0,
-        "current_phase": live_status.get('current_phase', scan.status) if live_status else scan.status,
-        "vulnerabilities_found": (scan.result_summary or {}).get('total_vulnerabilities', 0),
+        "progress_percentage": result_summary.get('progress_percentage', 0),
+        "current_phase": scan.status,
+        "vulnerabilities_found": result_summary.get('total_vulnerabilities', 0),
         "started_at": scan.started_at,
         "completed_at": scan.completed_at,
         "error": scan.error
     }
 
 
-@router.delete(
-    "/{scan_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+@router.post(
+    "/{scan_id}/cancel",
+    response_model=ScanResponse,
     dependencies=[Depends(PermissionChecker(["manage_scans"]))]
 )
 async def cancel_scan(
@@ -215,41 +208,58 @@ async def cancel_scan(
     db: Session = Depends(get_db)
 ):
     """
-    Cancel a running scan
-    
+    Cancel a running or queued scan.
+
     Required permission: manage_scans
     """
     scan = db.query(Scan).filter(
         Scan.id == scan_id,
         Scan.tenant_id == current_user.tenant_id
     ).first()
-    
+
     if not scan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scan not found"
         )
-    
-    # Can only cancel active scans
-    if scan.status not in ['queued', 'preparing', 'scanning', 'analyzing', 'aggregating']:
+
+    cancellable = {'pending', 'queued', 'running', 'preparing', 'scanning', 'analyzing', 'aggregating'}
+    if scan.status not in cancellable:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cannot cancel scan with status: {scan.status}"
         )
-    
-    # Cancel in orchestrator
-    try:
-        orch = get_orchestrator()
-        orch.cancel_scan(scan.id, reason="Cancelled by user")
-        
-        scan.status = "cancelled"
-        scan.completed_at = datetime.now()
-        db.commit()
-    
-    except Exception as e:
+
+    scan.status = "cancelled"
+    scan.completed_at = datetime.now()
+    db.commit()
+    db.refresh(scan)
+
+    return scan
+
+
+@router.delete(
+    "/{scan_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(PermissionChecker(["manage_scans"]))]
+)
+async def delete_scan(
+    scan_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Permanently delete a scan record."""
+    scan = db.query(Scan).filter(
+        Scan.id == scan_id,
+        Scan.tenant_id == current_user.tenant_id
+    ).first()
+
+    if not scan:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to cancel scan: {e}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found"
         )
-    
+
+    db.delete(scan)
+    db.commit()
     return None

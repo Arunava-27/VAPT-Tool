@@ -16,6 +16,7 @@ class ScanType(str, Enum):
     WEB = "web"
     CONTAINER = "container"
     CLOUD = "cloud"
+    FULL = "full"
     CUSTOM = "custom"
     COMPREHENSIVE = "comprehensive"
 

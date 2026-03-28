@@ -7,6 +7,7 @@ import ScansPage from '../pages/scans/ScansPage'
 import NewScanPage from '../pages/scans/NewScanPage'
 import ScanDetailPage from '../pages/scans/ScanDetailPage'
 import SettingsPage from '../pages/settings/SettingsPage'
+import InfraPage from '../pages/infra/InfraPage'
 
 export default function AppRouter() {
   return (
@@ -18,6 +19,7 @@ export default function AppRouter() {
         <Route path="/scans" element={<ScansPage />} />
         <Route path="/scans/new" element={<NewScanPage />} />
         <Route path="/scans/:id" element={<ScanDetailPage />} />
+        <Route path="/infra" element={<InfraPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

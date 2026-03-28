@@ -31,8 +31,8 @@ export default function DashboardPage() {
 
   useEffect(() => {
     listScans({ limit: 100 }).then((r) => {
-      const data = Array.isArray(r.data) ? r.data : []
-      dispatch(setScans({ scans: data, total: data.length }))
+      const scans = r.data?.scans ?? []
+      dispatch(setScans({ scans, total: r.data?.total ?? scans.length }))
     }).catch(() => {})
   }, [dispatch])
 

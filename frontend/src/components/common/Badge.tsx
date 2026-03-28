@@ -17,6 +17,9 @@ const scanTypeBg: Record<string, string> = {
 }
 
 export default function Badge({ type, value, className }: Props) {
+  // Guard: value may be undefined at runtime despite the type
+  if (!value) return null
+
   let cls = ''
   let label = value
 

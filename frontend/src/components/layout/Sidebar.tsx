@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { Shield, LayoutDashboard, Search, Plus, Settings, LogOut, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Shield, LayoutDashboard, Search, Plus, Settings, LogOut, ChevronLeft, ChevronRight, Server } from 'lucide-react'
 import { useDispatch, useSelector } from 'react-redux'
 import clsx from 'clsx'
 import type { RootState } from '../../store'
@@ -10,6 +10,7 @@ const nav = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/scans', icon: Search, label: 'Scans' },
   { to: '/scans/new', icon: Plus, label: 'New Scan' },
+  { to: '/infra', icon: Server, label: 'Infrastructure' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
