@@ -337,7 +337,7 @@ export default function ServiceDrawer({ svc, onClose }: Props) {
               <div>
                 <h2 className="text-base font-bold text-white">{svc.name}</h2>
                 <p className="text-xs text-slate-500 capitalize mt-0.5">
-                  {svc.category} · <span className={
+                  {svc.description ?? svc.category} · <span className={
                     svc.status === 'healthy' ? 'text-emerald-400' :
                     svc.status === 'degraded' ? 'text-amber-400' : 'text-rose-400'
                   }>{svc.status}</span>

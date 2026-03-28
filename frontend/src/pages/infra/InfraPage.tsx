@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
-import { RefreshCw, Database, Layers, Cpu, HardDrive, Server, Bot, Radio, CheckCircle, XCircle, AlertTriangle, Clock } from 'lucide-react'
+import { RefreshCw, Database, Layers, Cpu, HardDrive, Server, Bot, Radio,
+  CheckCircle, XCircle, AlertTriangle, Clock, Network, Globe, Container, Cloud, Swords } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getServicesHealth } from '../../api/infra'
 import type { ServiceHealth, ServicesHealthResponse } from '../../api/infra'
@@ -7,6 +8,7 @@ import { usePolling } from '../../hooks/usePolling'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 import ServiceDrawer from '../../components/infra/ServiceDrawer'
 
+// Per-category fallback icon
 const CATEGORY_ICON: Record<string, React.ElementType> = {
   database: Database,
   cache: Layers,
@@ -15,6 +17,15 @@ const CATEGORY_ICON: Record<string, React.ElementType> = {
   storage: HardDrive,
   backend: Bot,
   worker: Cpu,
+}
+
+// Per-worker-id icon override
+const WORKER_ICON: Record<string, React.ElementType> = {
+  'worker-nmap':       Network,
+  'worker-zap':        Globe,
+  'worker-trivy':      Container,
+  'worker-prowler':    Cloud,
+  'worker-metasploit': Swords,
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -56,7 +67,7 @@ function LatencyBadge({ ms }: { ms?: number }) {
 }
 
 function ServiceCard({ svc, onClick }: { svc: ServiceHealth; onClick: () => void }) {
-  const Icon = CATEGORY_ICON[svc.category] ?? Server
+  const Icon = WORKER_ICON[svc.id] ?? CATEGORY_ICON[svc.category] ?? Server
   const isHealthy = svc.status === 'healthy'
 
   return (
@@ -77,7 +88,7 @@ function ServiceCard({ svc, onClick }: { svc: ServiceHealth; onClick: () => void
           </div>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-white truncate">{svc.name}</p>
-            <p className="text-xs text-slate-500">{CATEGORY_LABEL[svc.category] ?? svc.category}</p>
+            <p className="text-xs text-slate-500">{svc.description ?? (CATEGORY_LABEL[svc.category] ?? svc.category)}</p>
           </div>
         </div>
         <StatusBadge status={svc.status} />
@@ -246,7 +257,7 @@ export default function InfraPage() {
         <section key={cat}>
           <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
             {(() => { const I = CATEGORY_ICON[cat] ?? Server; return <I className="w-3.5 h-3.5" /> })()}
-            {CATEGORY_LABEL[cat] ?? cat}s
+            {cat === 'worker' ? 'Security Workers' : (CATEGORY_LABEL[cat] ?? cat) + 's'}
             <span className="ml-auto text-slate-600 font-normal normal-case">
               {svcs.filter(s => s.status === 'healthy').length}/{svcs.length} healthy
             </span>

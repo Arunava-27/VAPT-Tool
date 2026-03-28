@@ -3,6 +3,7 @@ import apiClient from './client'
 export interface ServiceHealth {
   id: string
   name: string
+  description?: string
   category: 'database' | 'cache' | 'queue' | 'search' | 'storage' | 'backend' | 'worker'
   status: 'healthy' | 'unhealthy' | 'unreachable' | 'degraded'
   latency_ms?: number

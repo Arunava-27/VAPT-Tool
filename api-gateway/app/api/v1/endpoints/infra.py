@@ -159,6 +159,16 @@ async def probe_celery_workers() -> List[Dict[str, Any]]:
     return results
 
 
+# Human-readable names and descriptions for each security worker
+_WORKER_META: Dict[str, Dict[str, str]] = {
+    "nmap":       {"label": "Nmap Scanner",       "description": "Network port & service discovery"},
+    "zap":        {"label": "OWASP ZAP",          "description": "Web application vulnerability scanner"},
+    "trivy":      {"label": "Trivy",               "description": "Container & image vulnerability scanner"},
+    "prowler":    {"label": "Prowler",             "description": "Cloud security posture assessment"},
+    "metasploit": {"label": "Metasploit",          "description": "Exploitation framework & testing"},
+}
+
+
 # ---------------------------------------------------------------------------
 # Aggregated endpoint
 # ---------------------------------------------------------------------------
@@ -203,9 +213,15 @@ async def services_health(
     ]
 
     for w in workers_result:
+        queue_name = w["name"].replace("worker-", "")
+        display = _WORKER_META.get(queue_name, {
+            "label": queue_name.upper() + " Worker",
+            "description": f"{queue_name} security scanner",
+        })
         services.append({
             "id": w["name"],
-            "name": w["name"].replace("celery@", "").split("-")[0].upper() + " Worker",
+            "name": display["label"],
+            "description": display["description"],
             "category": "worker",
             **{k: v for k, v in w.items() if k != "name"},
         })
