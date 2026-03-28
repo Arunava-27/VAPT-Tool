@@ -5,6 +5,7 @@ import { getServicesHealth } from '../../api/infra'
 import type { ServiceHealth, ServicesHealthResponse } from '../../api/infra'
 import { usePolling } from '../../hooks/usePolling'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
+import ServiceDrawer from '../../components/infra/ServiceDrawer'
 
 const CATEGORY_ICON: Record<string, React.ElementType> = {
   database: Database,
@@ -54,14 +55,19 @@ function LatencyBadge({ ms }: { ms?: number }) {
   return <span className={`text-xs font-mono ${color}`}>{ms} ms</span>
 }
 
-function ServiceCard({ svc }: { svc: ServiceHealth }) {
+function ServiceCard({ svc, onClick }: { svc: ServiceHealth; onClick: () => void }) {
   const Icon = CATEGORY_ICON[svc.category] ?? Server
   const isHealthy = svc.status === 'healthy'
 
   return (
-    <div className={`bg-cyber-surface border rounded-xl p-4 transition-all ${
-      isHealthy ? 'border-cyber-border hover:border-cyber-primary/30' : 'border-rose-500/30 bg-rose-500/5'
-    }`}>
+    <div
+      onClick={onClick}
+      className={`bg-cyber-surface border rounded-xl p-4 transition-all cursor-pointer select-none ${
+        isHealthy
+          ? 'border-cyber-border hover:border-cyber-primary/50 hover:bg-cyber-primary/5'
+          : 'border-rose-500/30 bg-rose-500/5 hover:border-rose-500/60'
+      }`}
+    >
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-2.5">
           <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
@@ -164,6 +170,7 @@ export default function InfraPage() {
   const [loading, setLoading] = useState(true)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [selectedSvc, setSelectedSvc] = useState<ServiceHealth | null>(null)
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -242,10 +249,14 @@ export default function InfraPage() {
             </span>
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {svcs.map((svc) => <ServiceCard key={svc.id} svc={svc} />)}
+            {svcs.map((svc) => (
+              <ServiceCard key={svc.id} svc={svc} onClick={() => setSelectedSvc(svc)} />
+            ))}
           </div>
         </section>
       ))}
+
+      <ServiceDrawer svc={selectedSvc} onClose={() => setSelectedSvc(null)} />
     </div>
   )
 }

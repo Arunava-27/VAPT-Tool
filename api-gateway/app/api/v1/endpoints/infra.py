@@ -5,11 +5,13 @@ Celery workers, and the AI engine.
 """
 
 import asyncio
+import re
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -19,6 +21,18 @@ from .auth import get_current_active_user
 from ....models.user import User
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _rmq_creds():
+    """Parse RabbitMQ user/pass/host from the broker URL."""
+    rmq_url = getattr(settings, "RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
+    m = re.match(r"amqp://([^:]+):([^@]+)@([^:/]+)", rmq_url)
+    if m:
+        return m.group(1), m.group(2), m.group(3)
+    return "guest", "guest", "rabbitmq"
 
 # ---------------------------------------------------------------------------
 # Individual probes
@@ -114,14 +128,7 @@ async def probe_celery_workers() -> List[Dict[str, Any]]:
     results = []
 
     try:
-        rmq_url = getattr(settings, "RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/")
-        # Parse credentials from amqp URL: amqp://user:pass@host:port/
-        import re
-        m = re.match(r"amqp://([^:]+):([^@]+)@([^:/]+)", rmq_url)
-        user, password, host = ("guest", "guest", "rabbitmq")
-        if m:
-            user, password, host = m.group(1), m.group(2), m.group(3)
-
+        user, password, host = _rmq_creds()
         mgmt_url = f"http://{host}:15672/api/queues/%2F"
         async with httpx.AsyncClient(timeout=5) as client:
             res = await client.get(mgmt_url, auth=(user, password))
@@ -214,3 +221,351 @@ async def services_health(
         "duration_ms": round((time.monotonic() - t_start) * 1000, 1),
         "services": services,
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-service detail
+# ---------------------------------------------------------------------------
+
+async def _detail_postgres(db: Session) -> Dict[str, Any]:
+    try:
+        rows = {}
+        for q, key in [
+            ("SELECT version()", "version"),
+            ("SELECT pg_size_pretty(pg_database_size(current_database()))", "database_size"),
+            ("SELECT count(*) FROM pg_stat_activity WHERE state = 'active'", "active_connections"),
+            ("SELECT setting::int FROM pg_settings WHERE name='max_connections'", "max_connections"),
+            ("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'", "tables"),
+        ]:
+            result = db.execute(text(q)).scalar()
+            rows[key] = result
+        return {
+            **rows,
+            "actions": [
+                {"id": "analyze", "label": "Run VACUUM ANALYZE", "variant": "info",    "confirm": False},
+                {"id": "test",    "label": "Test Connection",     "variant": "default", "confirm": False},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+async def _detail_redis() -> Dict[str, Any]:
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.REDIS_URL, socket_connect_timeout=3, decode_responses=True)
+        info = r.info()
+        keyspace = r.info("keyspace")
+        return {
+            "version":          info.get("redis_version"),
+            "uptime_days":      info.get("uptime_in_days"),
+            "connected_clients": info.get("connected_clients"),
+            "used_memory":      info.get("used_memory_human"),
+            "maxmemory":        info.get("maxmemory_human", "unlimited"),
+            "hit_ratio":        round(
+                info.get("keyspace_hits", 0) /
+                max(info.get("keyspace_hits", 0) + info.get("keyspace_misses", 1), 1) * 100, 1
+            ),
+            "total_commands":   info.get("total_commands_processed"),
+            "keyspace":         {k: v for k, v in keyspace.items()},
+            "actions": [
+                {"id": "ping",      "label": "Ping Redis",        "variant": "default", "confirm": False},
+                {"id": "flush_db",  "label": "Flush Cache (DB 0)", "variant": "danger",  "confirm": True,
+                 "confirm_message": "This will delete ALL cached data. Are you sure?"},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+async def _detail_rabbitmq() -> Dict[str, Any]:
+    try:
+        user, password, host = _rmq_creds()
+        async with httpx.AsyncClient(timeout=5) as client:
+            overview = (await client.get(f"http://{host}:15672/api/overview", auth=(user, password))).json()
+            queues_raw = (await client.get(f"http://{host}:15672/api/queues/%2F", auth=(user, password))).json()
+
+        queues = [
+            {
+                "name":       q.get("name"),
+                "messages":   q.get("messages", 0),
+                "consumers":  q.get("consumers", 0),
+                "state":      q.get("state", "unknown"),
+                "memory":     q.get("memory", 0),
+            }
+            for q in queues_raw
+            if not q.get("name", "").startswith("celery@") and not q.get("name", "").startswith("celeryev")
+        ]
+        return {
+            "version":           overview.get("rabbitmq_version"),
+            "erlang_version":    overview.get("erlang_version"),
+            "total_connections": overview.get("object_totals", {}).get("connections", 0),
+            "total_channels":    overview.get("object_totals", {}).get("channels", 0),
+            "messages_ready":    overview.get("queue_totals", {}).get("messages_ready", 0),
+            "messages_unacked":  overview.get("queue_totals", {}).get("messages_unacknowledged", 0),
+            "queues":            sorted(queues, key=lambda q: q["name"]),
+            "actions": [
+                {"id": "purge_all", "label": "Purge All Tool Queues", "variant": "danger", "confirm": True,
+                 "confirm_message": "This will delete all pending messages from nmap/zap/trivy/prowler/metasploit queues."},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+async def _detail_elasticsearch() -> Dict[str, Any]:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            health = (await client.get(f"{settings.ELASTICSEARCH_URL}/_cluster/health")).json()
+            stats  = (await client.get(f"{settings.ELASTICSEARCH_URL}/_cluster/stats")).json()
+            indices_raw = (await client.get(f"{settings.ELASTICSEARCH_URL}/_cat/indices?format=json&bytes=b")).json()
+
+        indices = [
+            {
+                "name":   i.get("index"),
+                "docs":   int(i.get("docs.count", 0) or 0),
+                "size":   int(i.get("store.size", 0) or 0),
+                "status": i.get("health", "unknown"),
+            }
+            for i in indices_raw
+            if not i.get("index", "").startswith(".")
+        ]
+        return {
+            "version":       stats.get("nodes", {}).get("versions", ["?"])[0],
+            "cluster_name":  health.get("cluster_name"),
+            "status":        health.get("status"),
+            "nodes":         health.get("number_of_nodes"),
+            "data_nodes":    health.get("number_of_data_nodes"),
+            "active_shards": health.get("active_shards"),
+            "indices":       sorted(indices, key=lambda i: i["name"]),
+            "actions": [
+                {"id": "refresh",   "label": "Refresh All Indices", "variant": "info",    "confirm": False},
+                {"id": "test",      "label": "Test Connection",      "variant": "default", "confirm": False},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+async def _detail_minio() -> Dict[str, Any]:
+    try:
+        from minio import Minio
+        client = Minio(
+            settings.MINIO_ENDPOINT,
+            access_key=settings.MINIO_ACCESS_KEY,
+            secret_key=settings.MINIO_SECRET_KEY,
+            secure=settings.MINIO_SECURE,
+        )
+        buckets = client.list_buckets()
+        bucket_data = []
+        for b in buckets:
+            try:
+                size = sum(obj.size for obj in client.list_objects(b.name, recursive=True) if obj.size)
+                count = sum(1 for _ in client.list_objects(b.name, recursive=True))
+                bucket_data.append({"name": b.name, "objects": count, "size_bytes": size,
+                                    "created": str(b.creation_date)})
+            except Exception:
+                bucket_data.append({"name": b.name, "objects": "?", "size_bytes": 0})
+        return {
+            "endpoint":   settings.MINIO_ENDPOINT,
+            "secure":     settings.MINIO_SECURE,
+            "buckets":    bucket_data,
+            "actions": [
+                {"id": "test", "label": "Test Connection", "variant": "default", "confirm": False},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+async def _detail_ai_engine() -> Dict[str, Any]:
+    try:
+        ai_url = getattr(settings, "AI_ENGINE_URL", "http://ai-engine:8001")
+        async with httpx.AsyncClient(timeout=5) as client:
+            health = (await client.get(f"{ai_url}/health")).json()
+            try:
+                models = (await client.get(f"{ai_url}/models")).json()
+            except Exception:
+                models = {}
+        return {
+            **health,
+            "models": models,
+            "actions": [
+                {"id": "health_check", "label": "Run Health Check", "variant": "default", "confirm": False},
+                {"id": "test_analysis", "label": "Test Analysis", "variant": "info", "confirm": False},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+async def _detail_worker(queue_name: str) -> Dict[str, Any]:
+    try:
+        user, password, host = _rmq_creds()
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(f"http://{host}:15672/api/queues/%2F/{queue_name}", auth=(user, password))
+            if res.status_code != 200:
+                return {"error": f"Queue '{queue_name}' not found", "actions": []}
+            q = res.json()
+            consumers_raw = (await client.get(
+                f"http://{host}:15672/api/consumers/%2F", auth=(user, password)
+            )).json()
+
+        consumers = [
+            {
+                "tag":        c.get("consumer_tag"),
+                "channel":    c.get("channel_details", {}).get("name", "?"),
+                "ack_required": c.get("ack_required", True),
+            }
+            for c in consumers_raw
+            if c.get("queue", {}).get("name") == queue_name
+        ]
+
+        return {
+            "queue":              queue_name,
+            "messages_ready":     q.get("messages_ready", 0),
+            "messages_unacked":   q.get("messages_unacknowledged", 0),
+            "message_rate_in":    q.get("message_stats", {}).get("publish_details", {}).get("rate", 0),
+            "message_rate_out":   q.get("message_stats", {}).get("deliver_get_details", {}).get("rate", 0),
+            "consumers":          consumers,
+            "memory":             q.get("memory", 0),
+            "state":              q.get("state", "unknown"),
+            "actions": [
+                {"id": "purge", "label": f"Purge {queue_name} Queue", "variant": "danger", "confirm": True,
+                 "confirm_message": f"This will delete all pending messages from the '{queue_name}' queue."},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+@router.get("/services/{service_id}/detail")
+async def service_detail(
+    service_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Return rich detail data for a single service."""
+    worker_queues = ["nmap", "zap", "trivy", "prowler", "metasploit"]
+
+    if service_id == "postgres":
+        return await _detail_postgres(db)
+    elif service_id == "redis":
+        return await _detail_redis()
+    elif service_id == "rabbitmq":
+        return await _detail_rabbitmq()
+    elif service_id == "elasticsearch":
+        return await _detail_elasticsearch()
+    elif service_id == "minio":
+        return await _detail_minio()
+    elif service_id == "ai-engine":
+        return await _detail_ai_engine()
+    else:
+        # worker-nmap, worker-zap, etc.
+        queue = service_id.replace("worker-", "")
+        if queue in worker_queues:
+            return await _detail_worker(queue)
+
+    raise HTTPException(status_code=404, detail=f"Unknown service: {service_id}")
+
+
+# ---------------------------------------------------------------------------
+# Service actions
+# ---------------------------------------------------------------------------
+
+class ActionRequest(BaseModel):
+    action: str
+    params: Optional[Dict[str, Any]] = None
+
+
+@router.post("/services/{service_id}/action")
+async def run_service_action(
+    service_id: str,
+    body: ActionRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Execute a management action on a service."""
+    action = body.action
+
+    # ── PostgreSQL ──────────────────────────────────────────────────────────
+    if service_id == "postgres":
+        if action == "analyze":
+            db.execute(text("VACUUM ANALYZE"))
+            db.commit()
+            return {"ok": True, "message": "VACUUM ANALYZE completed successfully"}
+        elif action == "test":
+            db.execute(text("SELECT 1"))
+            return {"ok": True, "message": "PostgreSQL connection is healthy"}
+
+    # ── Redis ───────────────────────────────────────────────────────────────
+    elif service_id == "redis":
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.REDIS_URL, socket_connect_timeout=3)
+        if action == "ping":
+            r.ping()
+            return {"ok": True, "message": "Redis PONG — connection is healthy"}
+        elif action == "flush_db":
+            r.flushdb()
+            return {"ok": True, "message": "Redis DB 0 flushed — all cached keys deleted"}
+
+    # ── RabbitMQ ────────────────────────────────────────────────────────────
+    elif service_id == "rabbitmq":
+        if action == "purge_all":
+            user, password, host = _rmq_creds()
+            tool_queues = ["nmap", "zap", "trivy", "prowler", "metasploit"]
+            purged = []
+            async with httpx.AsyncClient(timeout=5) as client:
+                for q in tool_queues:
+                    res = await client.delete(
+                        f"http://{host}:15672/api/queues/%2F/{q}/contents",
+                        auth=(user, password)
+                    )
+                    if res.status_code in (204, 200):
+                        purged.append(q)
+            return {"ok": True, "message": f"Purged queues: {', '.join(purged)}"}
+
+    # ── Elasticsearch ───────────────────────────────────────────────────────
+    elif service_id == "elasticsearch":
+        async with httpx.AsyncClient(timeout=5) as client:
+            if action == "refresh":
+                await client.post(f"{settings.ELASTICSEARCH_URL}/_refresh")
+                return {"ok": True, "message": "All Elasticsearch indices refreshed"}
+            elif action == "test":
+                res = await client.get(f"{settings.ELASTICSEARCH_URL}/_cluster/health")
+                return {"ok": True, "message": f"Cluster status: {res.json().get('status', '?')}"}
+
+    # ── MinIO ───────────────────────────────────────────────────────────────
+    elif service_id == "minio":
+        if action == "test":
+            scheme = "https" if settings.MINIO_SECURE else "http"
+            async with httpx.AsyncClient(timeout=5) as client:
+                res = await client.get(f"{scheme}://{settings.MINIO_ENDPOINT}/minio/health/live")
+            return {"ok": res.status_code == 200, "message": "MinIO is reachable" if res.status_code == 200 else "MinIO unreachable"}
+
+    # ── AI Engine ───────────────────────────────────────────────────────────
+    elif service_id == "ai-engine":
+        ai_url = getattr(settings, "AI_ENGINE_URL", "http://ai-engine:8001")
+        async with httpx.AsyncClient(timeout=10) as client:
+            if action == "health_check":
+                res = await client.get(f"{ai_url}/health")
+                return {"ok": res.status_code == 200, "message": str(res.json())}
+            elif action == "test_analysis":
+                res = await client.post(f"{ai_url}/analyze", json={"test": True})
+                return {"ok": res.status_code == 200, "message": "Analysis engine responded OK"}
+
+    # ── Workers ─────────────────────────────────────────────────────────────
+    else:
+        queue = service_id.replace("worker-", "")
+        if action == "purge":
+            user, password, host = _rmq_creds()
+            async with httpx.AsyncClient(timeout=5) as client:
+                res = await client.delete(
+                    f"http://{host}:15672/api/queues/%2F/{queue}/contents",
+                    auth=(user, password)
+                )
+            if res.status_code in (204, 200):
+                return {"ok": True, "message": f"Purged all messages from '{queue}' queue"}
+            return {"ok": False, "message": f"Purge failed: HTTP {res.status_code}"}
+
+    raise HTTPException(status_code=400, detail=f"Unknown action '{action}' for service '{service_id}'")
