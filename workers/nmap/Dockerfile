@@ -20,7 +20,11 @@ RUN apt-get update && apt-get install -y \
     nmap \
     libpq5 \
     iproute2 \
+    libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# Grant nmap raw-socket capability so non-root workers can run ICMP/raw probes
+RUN setcap cap_net_raw,cap_net_admin+eip /usr/bin/nmap
 
 # Create non-root user
 RUN groupadd -r nmapworker && useradd -r -g nmapworker nmapworker
@@ -44,8 +48,8 @@ ENV PYTHONUNBUFFERED=1
 # Change ownership
 RUN chown -R nmapworker:nmapworker /app
 
-# Switch to non-root user
-USER nmapworker
+# Run as root so nmap can use raw sockets (ICMP, ARP, OS detection) for VAPT scanning.
+# The container is already isolated; Docker cap_add controls network access.
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

@@ -328,3 +328,71 @@ def _scan_to_dict(s: NetworkScan) -> Dict[str, Any]:
         "started_at": s.started_at.isoformat() if s.started_at else None,
         "completed_at": s.completed_at.isoformat() if s.completed_at else None,
     }
+
+
+# ─── Import endpoint (for host-side scanner agent) ───────────────────────────
+
+class ImportNodeData(BaseModel):
+    ip: str
+    mac: Optional[str] = None
+    hostname: Optional[str] = None
+    device_type: Optional[str] = "unknown"
+
+class ImportRequest(BaseModel):
+    network_range: str
+    nodes: List[ImportNodeData]
+
+@router.post("/import")
+async def import_scan_results(
+    body: ImportRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Accept scan results from an external host-side scanner agent.
+    Creates a completed NetworkScan record and upserts all discovered nodes.
+    Used when the platform runs on Windows Docker Desktop (where containers
+    can't reach the real LAN) — the agent runs natively on the host instead.
+    """
+    scan = NetworkScan(
+        scan_type="discovery",
+        network_range=body.network_range,
+        status="completed",
+        nodes_found=len(body.nodes),
+        created_by=current_user.id,
+        completed_at=datetime.utcnow(),
+    )
+    db.add(scan)
+    db.flush()
+
+    saved_nodes = []
+    for n in body.nodes:
+        node = db.query(NetworkNode).filter(NetworkNode.ip_address == n.ip).first()
+        if node:
+            node.mac_address = n.mac or node.mac_address
+            node.hostname = n.hostname or node.hostname
+            node.device_type = n.device_type or node.device_type
+            node.status = "active"
+            node.last_seen_at = datetime.utcnow()
+        else:
+            node = NetworkNode(
+                ip_address=n.ip,
+                mac_address=n.mac,
+                hostname=n.hostname,
+                device_type=n.device_type or "unknown",
+                network_range=body.network_range,
+                status="active",
+                last_seen_at=datetime.utcnow(),
+            )
+            db.add(node)
+            db.flush()
+        saved_nodes.append({"id": str(node.id), "ip": n.ip})
+
+    db.commit()
+    return {
+        "scan_id": str(scan.id),
+        "status": "completed",
+        "nodes_imported": len(saved_nodes),
+        "network_range": body.network_range,
+        "nodes": saved_nodes,
+    }

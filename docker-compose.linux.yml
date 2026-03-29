@@ -1,0 +1,29 @@
+# docker-compose.linux.yml
+# ============================================================
+# Production override for Linux hosts.
+#
+# On Linux, `network_mode: host` works correctly — the nmap
+# worker gets direct access to the physical LAN interface,
+# enabling real ARP + ICMP network discovery without any
+# host-agent script.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d
+#
+# Note: When using host networking, service URLs must use
+#       `localhost` instead of container names because the
+#       container shares the host network stack.
+# ============================================================
+
+services:
+  worker-nmap:
+    network_mode: host
+    networks: !reset []          # remove bridge network assignments
+    environment:
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@localhost:5672/
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@localhost:6379/0
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-vapt_user}:${POSTGRES_PASSWORD:-changeme123}@localhost:5432/${POSTGRES_DB:-vapt_platform}
+      - MINIO_ENDPOINT=localhost:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}

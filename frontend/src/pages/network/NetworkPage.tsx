@@ -526,8 +526,12 @@ export default function NetworkPage() {
   }, [activeScan?.id, activeScan?.status, fetchNodes])
 
   const handleDiscover = async () => {
+    const range = customRange.trim() || hostIfaces?.primary_range || undefined
+    if (!range) {
+      toast.error('Enter your host IP address below to set the scan range')
+      return
+    }
     try {
-      const range = customRange.trim() || hostIfaces?.primary_range || undefined
       const res = await discoverNetwork(range)
       const scanRes = await getScan(res.data.scan_id)
       setActiveScan(scanRes.data)
@@ -702,6 +706,33 @@ export default function NetworkPage() {
             ))}
           </div>
         ) : null}
+
+        {/* Docker isolation warning — shown when ALL worker interfaces are Docker-bridge (172.x) */}
+        {hostIfaces && !hostIfaces.error && hostIfaces.interfaces.length > 0 &&
+         hostIfaces.interfaces.every(i => i.is_docker) && (
+          <div className="mt-3 pt-3 border-t border-amber-500/20 bg-amber-500/5 rounded-lg px-3 py-2.5">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs">
+                <p className="text-amber-300 font-medium mb-1">
+                  Docker container cannot reach your LAN
+                </p>
+                <p className="text-slate-400 mb-2">
+                  The nmap worker is on a Docker bridge network ({hostIfaces.interfaces[0]?.ip}) — 
+                  not your real LAN. This is a Docker Desktop (Windows/macOS) limitation. 
+                  Run the host scanner agent instead:
+                </p>
+                <div className="bg-black/40 rounded px-2 py-1.5 font-mono text-slate-300 text-xs leading-relaxed select-all">
+                  pip install requests<br />
+                  python scripts/scan-agent.py --user admin@vapt.tool --password &lt;pw&gt;
+                </div>
+                <p className="text-slate-500 mt-1.5">
+                  On Linux servers, use <code className="bg-black/30 px-1 rounded">docker compose -f docker-compose.yml -f docker-compose.linux.yml up -d</code> for native LAN access.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Active scan progress banner with Cancel */}

@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'base'))
 from .config import celery_app
 from .scanner import NmapScanner
 from .parser import parse_nmap_xml
+from .net_utils import get_local_subnet, get_gateway_ips, get_interfaces as _net_get_interfaces
 from base_task import BaseTask, ErrorCategory, TaskError
 from result_parser import NmapResultParser
 
@@ -188,47 +189,21 @@ def network_discover(self, task_data):
       - network_range: CIDR like "192.168.1.0/24" (auto-detected if not given)
       - scan_id: UUID to update in DB
     """
-    import socket
     import subprocess
     import xml.etree.ElementTree as ET
     import psycopg2
     import psycopg2.extras
-    import re
 
     network_range = task_data.get("network_range")
     scan_id = task_data.get("scan_id")
 
-    # Auto-detect network range if not provided
+    # Auto-detect subnet via pure-Python ioctl (no subprocess/iproute2 needed)
     if not network_range:
-        try:
-            result = subprocess.run(
-                ["ip", "route", "get", "1.1.1.1"],
-                capture_output=True, text=True, timeout=5
-            )
-            match = re.search(r'src\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
-            if match:
-                src_ip = match.group(1)
-                parts = src_ip.split('.')
-                network_range = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
-        except Exception:
-            network_range = "192.168.1.0/24"
+        network_range = get_local_subnet() or "192.168.1.0/24"
+        logger.info(f"Auto-detected subnet: {network_range}")
 
-    # Detect default gateway IPs for correct device classification
-    gateway_ips = set()
-    try:
-        gw_result = subprocess.run(
-            ["ip", "route", "show"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in gw_result.stdout.splitlines():
-            m = re.search(r'via\s+(\d+\.\d+\.\d+\.\d+)', line)
-            if m:
-                gateway_ips.add(m.group(1))
-    except Exception:
-        # Guess gateway as .1 of the range
-        base = network_range.split('/')[0].rsplit('.', 1)[0]
-        gateway_ips.add(f"{base}.1")
-        gateway_ips.add(f"{base}.254")
+    # Detect gateway IPs via /proc/net/route (pure kernel read)
+    gateway_ips = get_gateway_ips()
 
     conn = None
     cur = None
@@ -263,7 +238,9 @@ def network_discover(self, task_data):
             "-oX", "-",
             network_range,
         ]
+        logger.info(f"Running nmap: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        logger.info(f"nmap returncode={result.returncode}, stdout_len={len(result.stdout)}, stderr={result.stderr[:500] if result.stderr else ''}")
         xml_out = result.stdout
 
         nodes = []
@@ -483,87 +460,13 @@ def node_scan(self, task_data):
 def get_interfaces():
     """
     Return network interfaces visible to the nmap worker.
-    Uses Python socket + iproute2 `ip` command (iproute2 is now installed in the Dockerfile).
-    Since the worker runs in Docker bridge networking (not host mode), these will be
-    Docker bridge IPs. The response also includes the default gateway to help identify
-    the host's LAN gateway IP.
+    Delegates to net_utils which uses pure-Python ioctl + /proc/net/route —
+    no subprocess, no iproute2 binary required.
     """
-    import subprocess
-    import re
+    from .net_utils import get_interfaces as _ifaces, _read_gateway
 
-    interfaces = []
-    gateway_ip = None
-
-    # Try `ip route` to get the default gateway
-    try:
-        gw_result = subprocess.run(
-            ["ip", "route", "show", "default"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in gw_result.stdout.splitlines():
-            m = re.search(r"via\s+(\d+\.\d+\.\d+\.\d+)", line)
-            if m:
-                gateway_ip = m.group(1)
-                break
-    except Exception:
-        pass
-
-    # Get all interfaces via `ip -o addr show`
-    try:
-        result = subprocess.run(
-            ["ip", "-o", "addr", "show"],
-            capture_output=True, text=True, timeout=5
-        )
-        for line in result.stdout.splitlines():
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            iface = parts[1]
-            if iface == "lo":
-                continue
-            family = parts[2]
-            if family != "inet":
-                continue
-            cidr = parts[3]
-            ip, prefix = cidr.split("/") if "/" in cidr else (cidr, "24")
-            octets = ip.split(".")
-            network_range = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{prefix}"
-
-            is_docker = bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
-            is_lan = (
-                ip.startswith("192.168.") or
-                ip.startswith("10.") or
-                bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
-            ) and not is_docker
-
-            interfaces.append({
-                "interface": iface,
-                "ip": ip,
-                "prefix": int(prefix),
-                "network_range": network_range,
-                "family": "ipv4",
-                "is_docker": is_docker,
-                "is_lan": is_lan,
-            })
-    except Exception as e:
-        # Fallback: use Python socket to get at least the container IP
-        try:
-            import socket
-            hostname = socket.gethostname()
-            host_ip = socket.gethostbyname(hostname)
-            octets = host_ip.split(".")
-            is_docker = bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", host_ip))
-            interfaces.append({
-                "interface": "eth0",
-                "ip": host_ip,
-                "prefix": 24,
-                "network_range": f"{octets[0]}.{octets[1]}.{octets[2]}.0/24",
-                "family": "ipv4",
-                "is_docker": is_docker,
-                "is_lan": False,
-            })
-        except Exception as e2:
-            return {"interfaces": [], "gateway_ip": None, "error": str(e2)}
+    interfaces = _ifaces()
+    gateway_ip = _read_gateway()
 
     return {
         "interfaces": interfaces,
