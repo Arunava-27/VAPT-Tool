@@ -6,6 +6,7 @@ import uuid
 import subprocess
 import re
 import socket
+import asyncio
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
@@ -110,7 +111,7 @@ async def discover_network(
     db.refresh(scan)
 
     celery_app = _get_celery_app()
-    celery_app.send_task(
+    task = celery_app.send_task(
         "nmap.network_discover",
         kwargs={"task_data": {
             "network_range": body.network_range,
@@ -118,6 +119,9 @@ async def discover_network(
         }},
         queue="nmap",
     )
+    # Store celery task ID so cancel can revoke it
+    scan.result = {"celery_task_id": task.id}
+    db.commit()
 
     return {"scan_id": str(scan.id), "status": "pending", "message": "Discovery scan started"}
 
@@ -171,7 +175,7 @@ async def scan_node(
     db.refresh(scan)
 
     celery_app = _get_celery_app()
-    celery_app.send_task(
+    task = celery_app.send_task(
         "nmap.node_scan",
         kwargs={"task_data": {
             "target": node.ip_address,
@@ -181,6 +185,8 @@ async def scan_node(
         }},
         queue="nmap",
     )
+    scan.result = {"celery_task_id": task.id}
+    db.commit()
 
     return {
         "scan_id": str(scan.id),
@@ -224,8 +230,70 @@ async def delete_node(
     return {"ok": True, "message": f"Node {node_id} deleted"}
 
 
-def _node_to_dict(n: NetworkNode) -> Dict[str, Any]:
-    return {
+@router.get("/host-interfaces")
+async def host_interfaces(
+    _: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """
+    Get network interfaces from the nmap worker (runs with host networking).
+    These reflect the Docker host's REAL LAN interfaces, unlike /status which
+    shows Docker bridge IPs inside the api-gateway container.
+    """
+    try:
+        celery = _get_celery_app()
+        task = celery.send_task("nmap.get_interfaces", queue="nmap")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, lambda: task.get(timeout=10))
+        ifaces = result.get("interfaces", []) if isinstance(result, dict) else []
+        lan_ifaces = [i for i in ifaces if i.get("is_lan")]
+        docker_only = len(ifaces) > 0 and len(lan_ifaces) == 0
+        return {
+            "interfaces": ifaces,
+            "lan_interfaces": lan_ifaces,
+            "docker_only": docker_only,
+            "has_lan_access": len(lan_ifaces) > 0,
+            "primary_range": lan_ifaces[0]["network_range"] if lan_ifaces else None,
+        }
+    except Exception as exc:
+        return {
+            "interfaces": [],
+            "lan_interfaces": [],
+            "docker_only": None,
+            "has_lan_access": False,
+            "primary_range": None,
+            "error": str(exc),
+        }
+
+
+@router.post("/scans/{scan_id}/cancel")
+async def cancel_scan(
+    scan_id: str,
+    _: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Cancel a pending or running scan."""
+    scan = db.query(NetworkScan).filter(NetworkScan.id == uuid.UUID(scan_id)).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if scan.status not in ("pending", "running"):
+        raise HTTPException(status_code=400, detail=f"Cannot cancel scan in state: {scan.status}")
+
+    # Revoke the Celery task if we stored its ID
+    celery_task_id = (scan.result or {}).get("celery_task_id")
+    if celery_task_id:
+        try:
+            celery = _get_celery_app()
+            celery.control.revoke(celery_task_id, terminate=True, signal="SIGTERM")
+        except Exception:
+            pass  # Revoke is best-effort
+
+    scan.status = "cancelled"
+    scan.completed_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "message": "Scan cancelled"}
+
+
+def _node_to_dict(n: NetworkNode) -> Dict[str, Any]:    return {
         "id": str(n.id),
         "ip_address": n.ip_address,
         "mac_address": n.mac_address,

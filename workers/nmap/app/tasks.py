@@ -425,3 +425,56 @@ def node_scan(self, task_data):
         if conn:
             conn.close()
         return {"status": "failed", "error": str(e)}
+
+@celery_app.task(name="nmap.get_interfaces")
+def get_interfaces():
+    """
+    Return network interfaces as seen by the nmap worker (host network mode).
+    Called by the API gateway to show the real LAN interfaces of the Docker host,
+    not the Docker bridge interfaces visible inside the gateway container.
+    """
+    import subprocess
+    import re
+
+    interfaces = []
+    try:
+        result = subprocess.run(
+            ["ip", "-o", "addr", "show"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            iface = parts[1]
+            if iface in ("lo",):
+                continue
+            family = parts[2]
+            if family != "inet":
+                continue
+            cidr = parts[3]
+            ip, prefix = cidr.split("/") if "/" in cidr else (cidr, "24")
+            octets = ip.split(".")
+            network_range = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{prefix}"
+
+            # Classify: private LAN or Docker bridge (172.16-31.x.x)
+            is_docker = bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
+            is_lan = (
+                ip.startswith("192.168.") or
+                ip.startswith("10.") or
+                bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
+            ) and not is_docker
+
+            interfaces.append({
+                "interface": iface,
+                "ip": ip,
+                "prefix": int(prefix),
+                "network_range": network_range,
+                "family": "ipv4",
+                "is_docker": is_docker,
+                "is_lan": is_lan,
+            })
+    except Exception as e:
+        return {"interfaces": [], "error": str(e)}
+
+    return {"interfaces": interfaces}

@@ -2,12 +2,14 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Laptop, Smartphone, Router, Server, Wifi, HelpCircle, Printer, Camera,
   RefreshCw, Search, Trash2, Zap, ChevronRight, X, Globe, Network,
+  AlertTriangle, CheckCircle, XCircle, Cpu,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
-  getNetworkStatus, getNodes, discoverNetwork, scanNode, deleteNode, getScan, listScans,
+  getNodes, discoverNetwork, scanNode, deleteNode, getScan,
+  getHostInterfaces, cancelScan,
 } from '../../api/network'
-import type { NetworkNode, NetworkScan, NetworkStatus } from '../../api/network'
+import type { NetworkNode, NetworkScan, HostInterfacesResponse } from '../../api/network'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 
 // ─── Device type icon mapping ────────────────────────────────────────────────
@@ -58,6 +60,7 @@ function ScanStatusBadge({ status }: { status: NetworkScan['status'] }) {
     running:   'bg-sky-500/10 text-sky-400 border-sky-500/30',
     completed: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
     failed:    'bg-rose-500/10 text-rose-400 border-rose-500/30',
+    cancelled: 'bg-slate-500/10 text-slate-400 border-slate-500/30',
   }
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded border text-xs font-medium ${map[status] ?? map.failed}`}>
@@ -393,7 +396,8 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function NetworkPage() {
   const [nodes, setNodes] = useState<NetworkNode[]>([])
-  const [netStatus, setNetStatus] = useState<NetworkStatus | null>(null)
+  const [hostIfaces, setHostIfaces] = useState<HostInterfacesResponse | null>(null)
+  const [ifacesLoading, setIfacesLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'list' | 'topology'>('list')
   const [filter, setFilter] = useState<FilterType>('all')
@@ -402,28 +406,41 @@ export default function NetworkPage() {
   const [activeScan, setActiveScan] = useState<NetworkScan | null>(null)
   const [showRangeInput, setShowRangeInput] = useState(false)
   const [customRange, setCustomRange] = useState('')
+  const [cancelling, setCancelling] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const fetchData = useCallback(async () => {
+  const fetchNodes = useCallback(async () => {
     try {
-      const [nodesRes, statusRes] = await Promise.all([getNodes(), getNetworkStatus()])
-      setNodes(nodesRes.data)
-      setNetStatus(statusRes.data)
+      const res = await getNodes()
+      setNodes(res.data)
     } catch {
-      // silently fail after initial load
+      // silently fail
     } finally {
       setLoading(false)
     }
   }, [])
 
+  const fetchHostInterfaces = useCallback(async () => {
+    setIfacesLoading(true)
+    try {
+      const res = await getHostInterfaces()
+      setHostIfaces(res.data)
+    } catch {
+      setHostIfaces({ interfaces: [], lan_interfaces: [], docker_only: null, has_lan_access: false, primary_range: null, error: 'Could not reach nmap worker' })
+    } finally {
+      setIfacesLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    fetchNodes()
+    fetchHostInterfaces()
+  }, [fetchNodes, fetchHostInterfaces])
 
   // Poll active scan
   useEffect(() => {
     if (!activeScan) return
-    if (activeScan.status === 'completed' || activeScan.status === 'failed') return
+    if (['completed', 'failed', 'cancelled'].includes(activeScan.status)) return
 
     pollRef.current = setInterval(async () => {
       try {
@@ -431,10 +448,13 @@ export default function NetworkPage() {
         setActiveScan(res.data)
         if (res.data.status === 'completed') {
           toast.success(`Discovery complete — ${res.data.nodes_found} node(s) found`)
-          fetchData()
+          fetchNodes()
           clearInterval(pollRef.current!)
         } else if (res.data.status === 'failed') {
           toast.error(`Discovery failed: ${res.data.error ?? 'unknown error'}`)
+          clearInterval(pollRef.current!)
+        } else if (res.data.status === 'cancelled') {
+          toast('Scan cancelled', { icon: '⛔' })
           clearInterval(pollRef.current!)
         }
       } catch {
@@ -443,11 +463,11 @@ export default function NetworkPage() {
     }, 3000)
 
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [activeScan?.id, activeScan?.status, fetchData])
+  }, [activeScan?.id, activeScan?.status, fetchNodes])
 
   const handleDiscover = async () => {
     try {
-      const range = customRange.trim() || undefined
+      const range = customRange.trim() || hostIfaces?.primary_range || undefined
       const res = await discoverNetwork(range)
       const scanRes = await getScan(res.data.scan_id)
       setActiveScan(scanRes.data)
@@ -456,6 +476,20 @@ export default function NetworkPage() {
       toast.success('Network discovery started')
     } catch {
       toast.error('Failed to start discovery')
+    }
+  }
+
+  const handleCancelScan = async () => {
+    if (!activeScan) return
+    setCancelling(true)
+    try {
+      await cancelScan(activeScan.id)
+      setActiveScan((prev) => prev ? { ...prev, status: 'cancelled' } : null)
+      toast('Scan cancelled', { icon: '⛔' })
+    } catch {
+      toast.error('Failed to cancel scan')
+    } finally {
+      setCancelling(false)
     }
   }
 
@@ -536,7 +570,7 @@ export default function NetworkPage() {
             )}
           </button>
           <button
-            onClick={fetchData}
+            onClick={fetchNodes}
             className="p-1.5 rounded-lg border border-cyber-border text-slate-400 hover:text-white transition-colors"
             title="Refresh"
           >
@@ -545,37 +579,90 @@ export default function NetworkPage() {
         </div>
       </div>
 
-      {/* Network status bar */}
-      {netStatus && (
-        <div className="bg-cyber-surface border border-cyber-border rounded-xl p-4">
-          <div className="flex flex-wrap items-center gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <Globe className="w-4 h-4 text-cyber-primary" />
-              <span className="text-slate-500">Host:</span>
-              <span className="text-white font-mono">{netStatus.hostname}</span>
+      {/* Host Network Verification Panel */}
+      <div className="bg-cyber-surface border border-cyber-border rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Cpu className="w-4 h-4 text-cyber-primary" />
+            <span className="text-sm font-medium text-slate-300">Scan Host Network</span>
+            <span className="text-xs text-slate-500">(interfaces visible to the nmap worker)</span>
+          </div>
+          <button
+            onClick={fetchHostInterfaces}
+            disabled={ifacesLoading}
+            className="p-1 text-slate-500 hover:text-white transition-colors"
+            title="Refresh interfaces"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${ifacesLoading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+
+        {ifacesLoading ? (
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <RefreshCw className="w-3 h-3 animate-spin" /> Querying nmap worker interfaces…
+          </div>
+        ) : hostIfaces?.error ? (
+          <div className="flex items-start gap-2 text-xs text-rose-400">
+            <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium">Cannot reach nmap worker</p>
+              <p className="text-rose-400/70 mt-0.5">{hostIfaces.error}</p>
+              <p className="text-slate-500 mt-1">Make sure the nmap worker container is running: <code className="font-mono bg-black/30 px-1 rounded">docker compose up -d worker-nmap</code></p>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500">IP:</span>
-              <span className="text-white font-mono">{netStatus.host_ip}</span>
+          </div>
+        ) : hostIfaces?.docker_only ? (
+          <div className="flex items-start gap-2 text-xs">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-amber-300">Docker host has no LAN interface</p>
+              <p className="text-slate-400 mt-1">
+                Only Docker bridge IPs detected ({hostIfaces.interfaces.map(i => i.ip).join(', ')}).
+                The Docker host machine is not connected to a physical LAN — network discovery will only find Docker containers.
+              </p>
+              <p className="text-slate-500 mt-1.5">
+                <strong className="text-slate-400">To resolve:</strong> Connect the Docker host machine to your target LAN (WiFi or Ethernet),
+                then enter the range manually below (e.g. <code className="font-mono bg-black/30 px-1 rounded">192.168.1.0/24</code>).
+              </p>
             </div>
-            {netStatus.interfaces.map((iface) => (
-              <div key={iface.interface} className="flex items-center gap-2">
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+              <CheckCircle className="w-3.5 h-3.5" />
+              <span>LAN access detected</span>
+            </div>
+            {hostIfaces?.lan_interfaces.map((iface) => (
+              <div key={iface.interface} className="flex items-center gap-1.5">
                 <span className="px-1.5 py-0.5 rounded bg-cyber-primary/10 border border-cyber-primary/20 text-cyber-primary text-xs font-mono">
                   {iface.interface}
                 </span>
                 <span className="text-slate-300 font-mono text-xs">{iface.ip}</span>
-                <span className="text-slate-500 text-xs">{iface.network_range}</span>
+                <button
+                  onClick={() => { setCustomRange(iface.network_range); setShowRangeInput(true) }}
+                  className="text-xs text-slate-500 hover:text-cyber-primary font-mono transition-colors"
+                  title="Use this range"
+                >
+                  {iface.network_range}
+                </button>
+              </div>
+            ))}
+            {(hostIfaces?.interfaces ?? []).filter(i => i.is_docker).map((iface) => (
+              <div key={iface.interface} className="flex items-center gap-1.5 opacity-40">
+                <span className="px-1.5 py-0.5 rounded bg-slate-700 border border-slate-600 text-slate-400 text-xs font-mono">
+                  {iface.interface} (docker)
+                </span>
+                <span className="text-slate-500 font-mono text-xs">{iface.ip}</span>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Active scan progress banner */}
+      {/* Active scan progress banner with Cancel */}
       {isScanning && activeScan && (
         <div className="bg-sky-500/10 border border-sky-500/30 rounded-xl px-4 py-3 flex items-center gap-3">
           <RefreshCw className="w-4 h-4 text-sky-400 animate-spin shrink-0" />
-          <div>
+          <div className="flex-1">
             <span className="text-sky-300 text-sm font-medium">
               {activeScan.scan_type === 'discovery' ? 'Discovering network' : `Scanning ${activeScan.target}`}…
             </span>
@@ -584,6 +671,14 @@ export default function NetworkPage() {
             )}
           </div>
           <ScanStatusBadge status={activeScan.status} />
+          <button
+            onClick={handleCancelScan}
+            disabled={cancelling}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-500/40 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            {cancelling ? <RefreshCw className="w-3 h-3 animate-spin" /> : <XCircle className="w-3 h-3" />}
+            Cancel
+          </button>
         </div>
       )}
 

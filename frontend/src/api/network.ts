@@ -21,12 +21,31 @@ export interface NetworkScan {
   scan_type: string
   target: string | null
   network_range: string | null
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   nodes_found: number
   result: Record<string, unknown>
   error: string | null
   started_at: string | null
   completed_at: string | null
+}
+
+export interface HostInterface {
+  interface: string
+  ip: string
+  prefix: number
+  network_range: string
+  family: string
+  is_docker: boolean
+  is_lan: boolean
+}
+
+export interface HostInterfacesResponse {
+  interfaces: HostInterface[]
+  lan_interfaces: HostInterface[]
+  docker_only: boolean | null
+  has_lan_access: boolean
+  primary_range: string | null
+  error?: string
 }
 
 export interface NetworkStatus {
@@ -37,6 +56,7 @@ export interface NetworkStatus {
 }
 
 export const getNetworkStatus = () => apiClient.get<NetworkStatus>('/api/v1/network/status')
+export const getHostInterfaces = () => apiClient.get<HostInterfacesResponse>('/api/v1/network/host-interfaces')
 export const discoverNetwork = (network_range?: string) =>
   apiClient.post<{ scan_id: string; status: string; message: string }>('/api/v1/network/discover', { network_range })
 export const getNodes = () => apiClient.get<NetworkNode[]>('/api/v1/network/nodes')
@@ -46,3 +66,5 @@ export const scanNode = (id: string, profile: string) =>
 export const deleteNode = (id: string) => apiClient.delete(`/api/v1/network/nodes/${id}`)
 export const getScan = (id: string) => apiClient.get<NetworkScan>(`/api/v1/network/scans/${id}`)
 export const listScans = () => apiClient.get<NetworkScan[]>('/api/v1/network/scans')
+export const cancelScan = (id: string) =>
+  apiClient.post<{ ok: boolean; message: string }>(`/api/v1/network/scans/${id}/cancel`)
