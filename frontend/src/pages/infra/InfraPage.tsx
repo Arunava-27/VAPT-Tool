@@ -119,6 +119,18 @@ function ServiceCard({ svc, onClick }: { svc: ServiceHealth; onClick: () => void
             <span className="text-slate-300">{svc.concurrency}</span>
           </div>
         )}
+        {svc.active_model && (
+          <div className="flex justify-between items-center">
+            <span className="text-slate-500">Model</span>
+            <span className="text-cyber-primary font-mono truncate max-w-[140px]">{svc.active_model}</span>
+          </div>
+        )}
+        {svc.active_provider && !svc.active_model && (
+          <div className="flex justify-between items-center">
+            <span className="text-slate-500">Provider</span>
+            <span className="text-slate-300">{svc.active_provider}</span>
+          </div>
+        )}
         {svc.tasks_processed && Object.keys(svc.tasks_processed).length > 0 && (
           <div className="flex justify-between items-center">
             <span className="text-slate-500">Tasks done</span>

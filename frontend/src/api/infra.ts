@@ -13,6 +13,9 @@ export interface ServiceHealth {
   nodes?: number | string
   concurrency?: number | string
   tasks_processed?: Record<string, number>
+  // AI Engine specific
+  active_model?: string
+  active_provider?: string
 }
 
 export interface ServicesHealthResponse {
@@ -34,6 +37,16 @@ export interface ServiceAction {
 export interface ServiceDetail {
   actions: ServiceAction[]
   error?: string
+  // AI Engine specific
+  active_provider?: string
+  active_model?: string
+  available_providers?: string[]
+  available_models?: string[]
+  fallback_chain?: string
+  ollama_url?: string
+  guardrails_enabled?: boolean
+  agent_timeout?: string
+  max_tokens?: number
   [key: string]: unknown
 }
 

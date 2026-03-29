@@ -1,14 +1,16 @@
 """
 AI Engine FastAPI service — exposes agent pipeline via HTTP.
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Header
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-import asyncio, uuid
+import asyncio, uuid, httpx
 
 from .engine import AIEngine
 from .core.config import settings
 from .core.logging import get_logger
+from .core.runtime import get as get_runtime, set_override, all_overrides
+from .providers.llm_provider import llm_manager
 
 logger = get_logger(__name__)
 app = FastAPI(title="VAPT AI Engine", version="1.0.0")
@@ -32,9 +34,87 @@ class ScanStatus(BaseModel):
     result: Optional[Dict[str, Any]] = None
 
 
+class ConfigUpdate(BaseModel):
+    model: Optional[str] = None
+    provider: Optional[str] = None
+
+
+def _active_provider() -> str:
+    return get_runtime("provider") or settings.LLM_FALLBACK_CHAIN.split(",")[0].strip()
+
+
+def _active_model() -> str:
+    provider = _active_provider()
+    override = get_runtime("model")
+    if override:
+        return override
+    if provider == "openai":
+        return settings.OPENAI_MODEL
+    if provider == "anthropic":
+        return settings.ANTHROPIC_MODEL
+    return settings.OLLAMA_MODEL  # default to ollama
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "ai-engine"}
+
+
+@app.get("/info")
+def info():
+    """Rich status: active provider, model, available providers, config."""
+    available = llm_manager.available_providers()
+    return {
+        "status": "ok",
+        "service": "ai-engine",
+        "active_provider": _active_provider(),
+        "active_model": _active_model(),
+        "available_providers": available,
+        "fallback_chain": settings.LLM_FALLBACK_CHAIN,
+        "ollama_url": settings.OLLAMA_BASE_URL,
+        "guardrails_enabled": settings.GUARDRAILS_ENABLED,
+        "agent_timeout_seconds": settings.AGENT_TIMEOUT_SECONDS,
+        "max_tokens": settings.MAX_TOKENS_PER_CALL,
+        "runtime_overrides": all_overrides(),
+    }
+
+
+@app.get("/models")
+async def list_models():
+    """List available models (from Ollama) and show the currently active one."""
+    models: List[str] = []
+    error: Optional[str] = None
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(f"{settings.OLLAMA_BASE_URL}/api/tags")
+            if res.status_code == 200:
+                models = [m["name"] for m in res.json().get("models", [])]
+            else:
+                error = f"Ollama returned {res.status_code}"
+    except Exception as exc:
+        error = str(exc)
+
+    return {
+        "provider": _active_provider(),
+        "current_model": _active_model(),
+        "models": models,
+        "ollama_url": settings.OLLAMA_BASE_URL,
+        **({"error": error} if error else {}),
+    }
+
+
+@app.patch("/config")
+def update_config(update: ConfigUpdate):
+    """Change active provider/model at runtime (resets on container restart)."""
+    if update.model is not None:
+        set_override("model", update.model)
+    if update.provider is not None:
+        set_override("provider", update.provider)
+    return {
+        "ok": True,
+        "active_provider": _active_provider(),
+        "active_model": _active_model(),
+    }
 
 
 @app.post("/analyze", response_model=ScanStatus)

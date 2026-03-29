@@ -111,12 +111,14 @@ async def probe_ai_engine() -> Dict[str, Any]:
     try:
         ai_url = getattr(settings, "AI_ENGINE_URL", "http://ai-engine:8001")
         async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.get(f"{ai_url}/health")
-            data = res.json()
+            res = await client.get(f"{ai_url}/info")
+            data = res.json() if res.status_code == 200 else {}
             return {
                 "status": "healthy" if res.status_code == 200 else "unhealthy",
                 "latency_ms": round((time.monotonic() - t) * 1000, 1),
-                "detail": data,
+                "active_model": data.get("active_model"),
+                "active_provider": data.get("active_provider"),
+                "description": f"{data.get('active_provider', 'AI')} · {data.get('active_model', '—')}",
             }
     except Exception as exc:
         return {"status": "unhealthy", "error": str(exc)}
@@ -397,18 +399,26 @@ async def _detail_minio() -> Dict[str, Any]:
 async def _detail_ai_engine() -> Dict[str, Any]:
     try:
         ai_url = getattr(settings, "AI_ENGINE_URL", "http://ai-engine:8001")
-        async with httpx.AsyncClient(timeout=5) as client:
-            health = (await client.get(f"{ai_url}/health")).json()
-            try:
-                models = (await client.get(f"{ai_url}/models")).json()
-            except Exception:
-                models = {}
+        async with httpx.AsyncClient(timeout=8) as client:
+            info_res = await client.get(f"{ai_url}/info")
+            info = info_res.json() if info_res.status_code == 200 else {}
+            models_res = await client.get(f"{ai_url}/models")
+            models_data = models_res.json() if models_res.status_code == 200 else {}
+
+        available_models = models_data.get("models", [])
         return {
-            **health,
-            "models": models,
+            "active_provider":      info.get("active_provider", "—"),
+            "active_model":         info.get("active_model", "—"),
+            "available_providers":  info.get("available_providers", []),
+            "fallback_chain":       info.get("fallback_chain", "—"),
+            "ollama_url":           info.get("ollama_url", "—"),
+            "guardrails_enabled":   info.get("guardrails_enabled", True),
+            "agent_timeout":        f"{info.get('agent_timeout_seconds', '—')}s",
+            "max_tokens":           info.get("max_tokens", "—"),
+            "available_models":     available_models,
             "actions": [
-                {"id": "health_check", "label": "Run Health Check", "variant": "default", "confirm": False},
-                {"id": "test_analysis", "label": "Test Analysis", "variant": "info", "confirm": False},
+                {"id": "health_check",  "label": "Run Health Check",   "variant": "default", "confirm": False},
+                {"id": "reload_models", "label": "Reload Model List",  "variant": "info",    "confirm": False},
             ],
         }
     except Exception as exc:
@@ -570,11 +580,31 @@ async def run_service_action(
         ai_url = getattr(settings, "AI_ENGINE_URL", "http://ai-engine:8001")
         async with httpx.AsyncClient(timeout=10) as client:
             if action == "health_check":
-                res = await client.get(f"{ai_url}/health")
-                return {"ok": res.status_code == 200, "message": str(res.json())}
-            elif action == "test_analysis":
-                res = await client.post(f"{ai_url}/analyze", json={"test": True})
-                return {"ok": res.status_code == 200, "message": "Analysis engine responded OK"}
+                res = await client.get(f"{ai_url}/info")
+                data = res.json() if res.status_code == 200 else {}
+                provider = data.get("active_provider", "?")
+                model = data.get("active_model", "?")
+                return {"ok": res.status_code == 200, "message": f"AI Engine healthy · {provider} / {model}"}
+            elif action == "reload_models":
+                res = await client.get(f"{ai_url}/models")
+                data = res.json() if res.status_code == 200 else {}
+                count = len(data.get("models", []))
+                return {"ok": True, "message": f"Found {count} model(s) available in Ollama"}
+            elif action == "change_model":
+                params = body.params or {}
+                model = params.get("model")
+                provider = params.get("provider")
+                if not model:
+                    return {"ok": False, "message": "No model specified"}
+                payload = {"model": model}
+                if provider:
+                    payload["provider"] = provider
+                res = await client.patch(f"{ai_url}/config", json=payload)
+                data = res.json() if res.status_code == 200 else {}
+                return {
+                    "ok": res.status_code == 200,
+                    "message": f"Model changed to {data.get('active_model', model)} via {data.get('active_provider', '?')}",
+                }
 
     # ── Workers ─────────────────────────────────────────────────────────────
     else:

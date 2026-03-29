@@ -229,15 +229,121 @@ function MinioDetail({ d }: { d: ServiceDetail }) {
   )
 }
 
-function AiEngineDetail({ d }: { d: ServiceDetail }) {
+function AiEngineDetail({ d, serviceId, onRefresh }: { d: ServiceDetail; serviceId: string; onRefresh: () => void }) {
+  const [switching, setSwitching] = useState(false)
+  const [selectedModel, setSelectedModel] = useState(d.active_model ?? '')
+
+  const availableModels: string[] = (d.available_models as string[]) ?? []
+  const availableProviders: string[] = (d.available_providers as string[]) ?? []
+
+  const handleModelSwitch = async () => {
+    if (!selectedModel || selectedModel === d.active_model) return
+    setSwitching(true)
+    try {
+      const res = await runServiceAction(serviceId, 'change_model', { model: selectedModel })
+      if (res.data.ok) {
+        toast.success(res.data.message)
+        onRefresh()
+      } else {
+        toast.error(res.data.message)
+      }
+    } catch {
+      toast.error('Failed to change model')
+    } finally {
+      setSwitching(false)
+    }
+  }
+
   return (
     <>
-      <SectionTitle>Engine Info</SectionTitle>
-      {Object.entries(d)
-        .filter(([k]) => !['actions', 'models', 'error'].includes(k))
-        .map(([k, v]) => (
-          <MetaRow key={k} label={k.replace(/_/g, ' ')} value={typeof v === 'object' ? JSON.stringify(v) : String(v)} />
-        ))}
+      <SectionTitle>Active Configuration</SectionTitle>
+      <div className="bg-cyber-primary/5 border border-cyber-primary/20 rounded-lg px-4 py-3 mb-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-slate-400">Active Model</span>
+          <span className="text-sm font-bold text-cyber-primary font-mono">{d.active_model ?? '—'}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-400">Provider</span>
+          <span className="text-xs text-slate-300 capitalize">{d.active_provider ?? '—'}</span>
+        </div>
+      </div>
+
+      <MetaRow label="Fallback chain"     value={d.fallback_chain as string} />
+      <MetaRow label="Ollama URL"         value={d.ollama_url as string} />
+      <MetaRow label="Guardrails"         value={d.guardrails_enabled ? '✅ Enabled' : '⚠ Disabled'} />
+      <MetaRow label="Agent timeout"      value={d.agent_timeout as string} />
+      <MetaRow label="Max tokens"         value={String(d.max_tokens ?? '—')} />
+
+      {availableProviders.length > 0 && (
+        <>
+          <SectionTitle>Available Providers</SectionTitle>
+          <div className="flex flex-wrap gap-1.5">
+            {availableProviders.map((p) => (
+              <span key={p} className={`px-2 py-0.5 rounded text-xs font-medium border ${
+                p === d.active_provider
+                  ? 'bg-cyber-primary/15 border-cyber-primary/40 text-cyber-primary'
+                  : 'bg-slate-800/50 border-slate-700 text-slate-400'
+              }`}>
+                {p}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+
+      {availableModels.length > 0 && (
+        <>
+          <SectionTitle>Switch Model</SectionTitle>
+          <p className="text-xs text-slate-500 mb-2">
+            Changes take effect immediately. Resets to default on container restart.
+          </p>
+          <div className="flex gap-2">
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="flex-1 bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyber-primary"
+            >
+              {availableModels.map((m) => (
+                <option key={m} value={m}>{m}{m === d.active_model ? ' (active)' : ''}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleModelSwitch}
+              disabled={switching || selectedModel === d.active_model}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-cyber-primary/40 text-cyber-primary text-xs font-medium hover:bg-cyber-primary/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+            >
+              {switching && <RefreshCw className="w-3 h-3 animate-spin" />}
+              Apply
+            </button>
+          </div>
+          <div className="mt-2 space-y-1">
+            {availableModels.map((m) => (
+              <button
+                key={m}
+                onClick={() => setSelectedModel(m)}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-lg border text-xs transition-colors ${
+                  m === d.active_model
+                    ? 'border-cyber-primary/40 bg-cyber-primary/10 text-cyber-primary'
+                    : m === selectedModel
+                    ? 'border-slate-500 bg-slate-800/60 text-slate-200'
+                    : 'border-cyber-border text-slate-400 hover:border-slate-500 hover:text-slate-300'
+                }`}
+              >
+                <span className="font-mono">{m}</span>
+                {m === d.active_model && (
+                  <span className="text-cyber-primary text-xs">● Active</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {availableModels.length === 0 && (
+        <div className="mt-2 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5 text-xs text-amber-300">
+          No models found in Ollama. Run: <code className="font-mono bg-black/30 px-1 rounded">docker exec vapt-ollama ollama pull llama3.2</code>
+        </div>
+      )}
     </>
   )
 }
@@ -267,13 +373,13 @@ function WorkerDetail({ d }: { d: ServiceDetail }) {
   )
 }
 
-function DetailBody({ svc, detail }: { svc: ServiceHealth; detail: ServiceDetail }) {
+function DetailBody({ svc, detail, onRefresh }: { svc: ServiceHealth; detail: ServiceDetail; onRefresh: () => void }) {
   if (svc.category === 'database')       return <PostgresDetail d={detail} />
   if (svc.category === 'cache')          return <RedisDetail d={detail} />
   if (svc.category === 'queue')          return <RabbitMQDetail d={detail} />
   if (svc.category === 'search')         return <ElasticsearchDetail d={detail} />
   if (svc.category === 'storage')        return <MinioDetail d={detail} />
-  if (svc.id === 'ai-engine')            return <AiEngineDetail d={detail} />
+  if (svc.id === 'ai-engine')            return <AiEngineDetail d={detail} serviceId={svc.id} onRefresh={onRefresh} />
   if (svc.category === 'worker')         return <WorkerDetail d={detail} />
   return <p className="text-xs text-slate-500 mt-4">No additional detail available.</p>
 }
@@ -389,7 +495,7 @@ export default function ServiceDrawer({ svc, onClose }: Props) {
                       {detail.error}
                     </p>
                   ) : (
-                    <DetailBody svc={svc} detail={detail} />
+                    <DetailBody svc={svc} detail={detail} onRefresh={() => load(svc.id)} />
                   )}
 
                   {/* quick links */}

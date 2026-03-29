@@ -11,6 +11,7 @@ from typing import List, Optional, Dict, Any
 
 from ..core.config import settings
 from ..core.logging import get_logger
+from ..core.runtime import get as get_runtime
 
 logger = get_logger(__name__)
 
@@ -118,7 +119,8 @@ class OllamaProvider(BaseLLMProvider):
 
     def complete(self, messages: List[Message], **kwargs) -> LLMResponse:
         import requests, json
-        model = kwargs.get("model", settings.OLLAMA_MODEL)
+        # Respect runtime model override (set via PATCH /config)
+        model = kwargs.get("model") or get_runtime("model") or settings.OLLAMA_MODEL
         payload = {
             "model": model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
