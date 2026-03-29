@@ -1,5 +1,5 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { Shield, LayoutDashboard, Search, Plus, Settings, LogOut, ChevronLeft, ChevronRight, Server, Users } from 'lucide-react'
+import { Shield, LayoutDashboard, Search, Plus, Settings, LogOut, ChevronLeft, ChevronRight, Server, Users, Network } from 'lucide-react'
 import { useDispatch, useSelector } from 'react-redux'
 import clsx from 'clsx'
 import type { RootState } from '../../store'
@@ -53,6 +53,8 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">
         <NavItem to="/dashboard" icon={LayoutDashboard} label="Dashboard" end />
+
+        <NavItem to="/network" icon={Network} label="Network" />
 
         {/* Scans group */}
         <NavLink to="/scans" end

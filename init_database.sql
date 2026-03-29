@@ -179,6 +179,42 @@ BEGIN
 END $$;
 
 -- ============================================================================
+-- TABLE 6: Network Nodes (discovered hosts)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS network_nodes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ip_address VARCHAR(45) NOT NULL,
+    mac_address VARCHAR(17),
+    hostname VARCHAR(255),
+    os_family VARCHAR(100),
+    os_version VARCHAR(200),
+    device_type VARCHAR(50) DEFAULT 'unknown',
+    open_ports JSONB DEFAULT '[]',
+    services JSONB DEFAULT '[]',
+    status VARCHAR(20) DEFAULT 'active',
+    network_range VARCHAR(50),
+    last_scan_id UUID,
+    first_discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ip_address)
+);
+
+-- TABLE 7: Network Discovery Scans
+CREATE TABLE IF NOT EXISTS network_scans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    scan_type VARCHAR(50) NOT NULL,
+    target VARCHAR(255),
+    network_range VARCHAR(50),
+    status VARCHAR(20) DEFAULT 'pending',
+    nodes_found INTEGER DEFAULT 0,
+    result JSONB DEFAULT '{}',
+    error TEXT,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    created_by UUID REFERENCES users(id)
+);
+
+-- ============================================================================
 -- VERIFICATION QUERIES
 -- ============================================================================
 

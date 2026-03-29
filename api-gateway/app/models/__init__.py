@@ -10,6 +10,7 @@ from .vulnerability import Vulnerability
 from .report import Report
 from .audit_log import AuditLog
 from .scan_finding import ScanFinding
+from .network import NetworkNode, NetworkScan
 
 __all__ = [
     "User",
@@ -24,4 +25,6 @@ __all__ = [
     "Report",
     "AuditLog",
     "ScanFinding",
+    "NetworkNode",
+    "NetworkScan",
 ]

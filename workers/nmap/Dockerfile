@@ -4,6 +4,7 @@ FROM python:3.11-slim as builder
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and build wheels
@@ -17,6 +18,7 @@ FROM python:3.11-slim
 # Install nmap and minimal dependencies
 RUN apt-get update && apt-get install -y \
     nmap \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -28,7 +30,7 @@ WORKDIR /app
 COPY --from=builder /wheels /wheels
 
 # Install Python packages from wheels
-RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* \
+RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/*.whl \
     && rm -rf /wheels
 
 # Copy application code

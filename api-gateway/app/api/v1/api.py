@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles
+from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles, network
 
 api_router = APIRouter()
 
@@ -65,4 +65,11 @@ api_router.include_router(
     ws.router,
     prefix="/ws",
     tags=["websocket"]
+)
+
+# Network discovery and node VAPT
+api_router.include_router(
+    network.router,
+    prefix="/network",
+    tags=["network"]
 )
