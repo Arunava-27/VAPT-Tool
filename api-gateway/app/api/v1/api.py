@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles, network
+from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles, network, logs
 
 api_router = APIRouter()
 
@@ -72,4 +72,11 @@ api_router.include_router(
     network.router,
     prefix="/network",
     tags=["network"]
+)
+
+# Docker container logs
+api_router.include_router(
+    logs.router,
+    prefix="/logs",
+    tags=["logs"]
 )

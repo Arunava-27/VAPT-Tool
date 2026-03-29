@@ -227,6 +227,7 @@ services:
       - SUPERUSER_PASSWORD=${SUPERUSER_PASSWORD:-}
     volumes:
       - ./api-gateway:/app
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - frontend-network
       - backend-network

@@ -1,5 +1,5 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { Shield, LayoutDashboard, Search, Plus, Settings, LogOut, ChevronLeft, ChevronRight, Server, Users, Network } from 'lucide-react'
+import { Shield, LayoutDashboard, Search, Plus, Settings, LogOut, ChevronLeft, ChevronRight, Server, Users, Network, FileText } from 'lucide-react'
 import { useDispatch, useSelector } from 'react-redux'
 import clsx from 'clsx'
 import type { RootState } from '../../store'
@@ -98,6 +98,8 @@ export default function Sidebar() {
         )}
 
         <NavItem to="/infra" icon={Server} label="Infrastructure" />
+
+        <NavItem to="/logs" icon={FileText} label="Logs" />
 
         {/* Admin section — super admin only */}
         {user?.is_superuser && (

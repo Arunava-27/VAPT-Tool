@@ -11,6 +11,7 @@ import SettingsPage from '../pages/settings/SettingsPage'
 import InfraPage from '../pages/infra/InfraPage'
 import UsersPage from '../pages/admin/UsersPage'
 import NetworkPage from '../pages/network/NetworkPage'
+import LogsPage from '../pages/logs/LogsPage'
 
 interface AppRouterProps {
   setupRequired?: boolean
@@ -37,6 +38,7 @@ export default function AppRouter({ setupRequired }: AppRouterProps) {
         <Route path="/scans/new" element={<NewScanPage />} />
         <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route path="/infra" element={<InfraPage />} />
+        <Route path="/logs" element={<LogsPage />} />
         <Route path="/admin/users" element={<UsersPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
