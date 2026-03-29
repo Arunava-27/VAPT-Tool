@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users, ai, infra, ws
+from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles
 
 api_router = APIRouter()
 
@@ -18,6 +18,13 @@ api_router.include_router(
     tags=["infrastructure"]
 )
 
+# First-run setup (public — no auth required)
+api_router.include_router(
+    setup.router,
+    prefix="/setup",
+    tags=["setup"]
+)
+
 # Authentication
 api_router.include_router(
     auth.router,
@@ -30,6 +37,13 @@ api_router.include_router(
     users.router,
     prefix="/users",
     tags=["users"]
+)
+
+# Roles
+api_router.include_router(
+    roles.router,
+    prefix="/roles",
+    tags=["roles"]
 )
 
 # Scans

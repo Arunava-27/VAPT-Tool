@@ -74,46 +74,41 @@ def init_database():
         db.commit()
         logger.info(f"✓ Created {roles_created} system roles")
         
-        # Create superuser if not exists
-        superuser_email = os.getenv("SUPERUSER_EMAIL", "admin@vapt-platform.local")
-        superuser_password = os.getenv("SUPERUSER_PASSWORD", "changeme123")
-        
-        existing_superuser = db.query(User).filter(User.email == superuser_email).first()
-        
-        if not existing_superuser:
-            logger.info("Creating superuser...")
-            
-            # Get super_admin role
-            super_admin_role = db.query(Role).filter(Role.slug == "super_admin").first()
-            
-            superuser = User(
-                email=superuser_email,
-                hashed_password=hash_password(superuser_password),
-                full_name="Super Administrator",
-                is_active=True,
-                is_superuser=True,
-                is_verified=True,
-                tenant_id=default_tenant.id
-            )
-            
-            if super_admin_role:
-                superuser.roles.append(super_admin_role)
-            
-            db.add(superuser)
-            db.commit()
-            logger.info(f"✓ Superuser created: {superuser_email}")
-            logger.info(f"  Password: {superuser_password}")
-            logger.info("  ⚠️  Please change the superuser password after first login!")
+        # Create superuser if SUPERUSER_EMAIL env var is explicitly set
+        # (e.g. for automated/CI deployments). In interactive deployments
+        # the first-run setup wizard (/api/v1/setup/init) handles this.
+        superuser_email = os.getenv("SUPERUSER_EMAIL", "")
+        superuser_password = os.getenv("SUPERUSER_PASSWORD", "")
+
+        if superuser_email and superuser_password:
+            existing_superuser = db.query(User).filter(User.is_superuser == True).first()  # noqa
+            if not existing_superuser:
+                logger.info("Creating superuser from environment variables...")
+                super_admin_role = db.query(Role).filter(Role.slug == "super_admin").first()
+                superuser = User(
+                    email=superuser_email,
+                    hashed_password=hash_password(superuser_password),
+                    full_name="Super Administrator",
+                    is_active=True,
+                    is_superuser=True,
+                    is_verified=True,
+                    tenant_id=default_tenant.id
+                )
+                if super_admin_role:
+                    superuser.roles.append(super_admin_role)
+                db.add(superuser)
+                db.commit()
+                logger.info(f"✓ Superuser created: {superuser_email}")
+                logger.info("  ⚠️  Please change the superuser password after first login!")
+            else:
+                logger.info("Superuser already exists — skipping.")
         else:
-            logger.info(f"Superuser already exists: {superuser_email}")
-        
+            logger.info("No SUPERUSER_EMAIL set — skipping superuser creation.")
+            logger.info("Visit the platform URL to complete first-run setup.")
+
         logger.info("\n" + "="*60)
         logger.info("Database initialization completed successfully!")
         logger.info("="*60)
-        logger.info(f"\nDefault Login Credentials:")
-        logger.info(f"  Email: {superuser_email}")
-        logger.info(f"  Password: {superuser_password}")
-        logger.info("\n⚠️  Remember to change the password after first login!\n")
     
     except Exception as e:
         logger.error(f"Error initializing database: {e}")

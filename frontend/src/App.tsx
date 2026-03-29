@@ -5,23 +5,43 @@ import { Toaster } from 'react-hot-toast'
 import { store } from './store'
 import { setUser, logout } from './store/slices/authSlice'
 import { getMe } from './api/auth'
+import { getSetupStatus } from './api/setup'
 import AppRouter from './router'
 import LoadingSpinner from './components/common/LoadingSpinner'
 
-// Rehydrates user state on page refresh if a token exists in localStorage
+// Checks setup status and rehydrates auth state on every page load
 function AuthLoader({ children }: { children: React.ReactNode }) {
   const [ready, setReady] = useState(false)
+  const [setupRequired, setSetupRequired] = useState(false)
 
   useEffect(() => {
-    const token = localStorage.getItem('access_token')
-    if (!token) {
-      setReady(true)
-      return
+    async function init() {
+      try {
+        const { setup_required } = await getSetupStatus()
+        if (setup_required) {
+          setSetupRequired(true)
+          setReady(true)
+          return
+        }
+      } catch {
+        // If setup endpoint fails, proceed normally (backend may not have migrated yet)
+      }
+
+      const token = localStorage.getItem('access_token')
+      if (!token) {
+        setReady(true)
+        return
+      }
+      try {
+        const res = await getMe()
+        store.dispatch(setUser(res.data))
+      } catch {
+        store.dispatch(logout())
+      } finally {
+        setReady(true)
+      }
     }
-    getMe()
-      .then((res) => store.dispatch(setUser(res.data)))
-      .catch(() => store.dispatch(logout()))
-      .finally(() => setReady(true))
+    init()
   }, [])
 
   if (!ready) {
@@ -30,6 +50,11 @@ function AuthLoader({ children }: { children: React.ReactNode }) {
         <LoadingSpinner size="lg" />
       </div>
     )
+  }
+
+  // Inject a flag so the router can read it without an extra API call
+  if (setupRequired) {
+    return <AppRouter setupRequired />
   }
   return <>{children}</>
 }
