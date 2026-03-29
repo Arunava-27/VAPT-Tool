@@ -381,6 +381,67 @@ function WorkerDetail({ d }: { d: ServiceDetail }) {
   )
 }
 
+function VaultDetail({ d, serviceId, onRefresh }: { d: ServiceDetail; serviceId: string; onRefresh: () => void }) {
+  const sealed = d.sealed as boolean | undefined
+  const initialized = d.initialized as boolean | undefined
+
+  return (
+    <>
+      <SectionTitle>Vault Status</SectionTitle>
+      <MetaRow label="Version"       value={d.version as string} />
+      <MetaRow label="Storage"       value={d.storage_backend as string} />
+      <MetaRow label="Cluster"       value={d.cluster_name as string} />
+      <MetaRow label="Cluster ID"    value={(d.cluster_id as string)?.slice(0, 18) + '…'} />
+      <MetaRow
+        label="Initialized"
+        value={
+          <span className={initialized ? 'text-cyber-primary' : 'text-red-400'}>
+            {initialized ? '✓ Yes' : '✗ No'}
+          </span>
+        }
+      />
+      <MetaRow
+        label="Seal State"
+        value={
+          <span className={!sealed ? 'text-cyber-primary' : 'text-amber-400'}>
+            {!sealed ? '🔓 Unsealed' : '🔒 Sealed'}
+          </span>
+        }
+      />
+
+      <SectionTitle>Access</SectionTitle>
+      <div className="flex items-center gap-2 py-2">
+        <a
+          href="http://localhost:8200/ui"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 text-xs text-cyber-primary hover:underline"
+        >
+          <ExternalLink className="w-3 h-3" />
+          Open Vault UI
+        </a>
+      </div>
+
+      {sealed && (
+        <div className="mt-3 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5 text-xs text-amber-300">
+          Vault is sealed. Run: <code className="font-mono bg-black/30 px-1 rounded">docker compose up vault-init</code> to unseal.
+        </div>
+      )}
+
+      {(d.actions as ServiceAction[] ?? []).length > 0 && (
+        <>
+          <SectionTitle>Actions</SectionTitle>
+          <div className="flex flex-wrap gap-2">
+            {(d.actions as ServiceAction[]).map((a) => (
+              <ActionButton key={a.id} action={a} serviceId={serviceId} onDone={onRefresh} />
+            ))}
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
 function DetailBody({ svc, detail, onRefresh }: { svc: ServiceHealth; detail: ServiceDetail; onRefresh: () => void }) {
   if (svc.category === 'database')       return <PostgresDetail d={detail} />
   if (svc.category === 'cache')          return <RedisDetail d={detail} />
@@ -388,6 +449,7 @@ function DetailBody({ svc, detail, onRefresh }: { svc: ServiceHealth; detail: Se
   if (svc.category === 'search')         return <ElasticsearchDetail d={detail} />
   if (svc.category === 'storage')        return <MinioDetail d={detail} />
   if (svc.id === 'ai-engine')            return <AiEngineDetail d={detail} serviceId={svc.id} onRefresh={onRefresh} />
+  if (svc.id === 'vault')                return <VaultDetail d={detail} serviceId={svc.id} onRefresh={onRefresh} />
   if (svc.category === 'worker')         return <WorkerDetail d={detail} />
   return <p className="text-xs text-slate-500 mt-4">No additional detail available.</p>
 }

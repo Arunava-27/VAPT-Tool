@@ -1,7 +1,7 @@
 """
 Infrastructure services health check endpoint.
 Probes all platform dependencies: DB, Redis, RabbitMQ, Elasticsearch, MinIO,
-Celery workers, and the AI engine.
+Celery workers, AI engine, and Vault.
 """
 
 import asyncio
@@ -161,6 +161,37 @@ async def probe_celery_workers() -> List[Dict[str, Any]]:
     return results
 
 
+async def probe_vault() -> Dict[str, Any]:
+    t = time.monotonic()
+    try:
+        vault_url = getattr(settings, "VAULT_URL", "http://vault:8200")
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(f"{vault_url}/v1/sys/health")
+            data = res.json() if res.status_code in (200, 429, 472, 473, 501, 503) else {}
+            initialized = data.get("initialized", False)
+            sealed = data.get("sealed", True)
+            version = data.get("version", "—")
+            if initialized and not sealed:
+                status = "healthy"
+                description = f"Vault {version} · unsealed"
+            elif initialized and sealed:
+                status = "degraded"
+                description = f"Vault {version} · sealed"
+            else:
+                status = "unhealthy"
+                description = "Vault not initialized"
+            return {
+                "status": status,
+                "latency_ms": round((time.monotonic() - t) * 1000, 1),
+                "description": description,
+                "vault_version": version,
+                "initialized": initialized,
+                "sealed": sealed,
+            }
+    except Exception as exc:
+        return {"status": "unreachable", "error": str(exc)}
+
+
 # Human-readable names and descriptions for each security worker
 _WORKER_META: Dict[str, Dict[str, str]] = {
     "nmap":       {"label": "Nmap Scanner",       "description": "Network port & service discovery"},
@@ -193,6 +224,7 @@ async def services_health(
         es_result,
         minio_result,
         ai_result,
+        vault_result,
         workers_result,
     ) = await asyncio.gather(
         probe_postgres(db),
@@ -201,6 +233,7 @@ async def services_health(
         probe_elasticsearch(),
         probe_minio(),
         probe_ai_engine(),
+        probe_vault(),
         probe_celery_workers(),
         return_exceptions=False,
     )
@@ -212,6 +245,7 @@ async def services_health(
         {"id": "elasticsearch",  "name": "Elasticsearch",    "category": "search",   **es_result},
         {"id": "minio",          "name": "MinIO",            "category": "storage",  **minio_result},
         {"id": "ai-engine",      "name": "AI Engine",        "category": "backend",  **ai_result},
+        {"id": "vault",          "name": "HashiCorp Vault",  "category": "secrets",  **vault_result},
     ]
 
     for w in workers_result:
@@ -425,8 +459,28 @@ async def _detail_ai_engine() -> Dict[str, Any]:
         return {"error": str(exc), "actions": []}
 
 
-async def _detail_worker(queue_name: str) -> Dict[str, Any]:
+async def _detail_vault() -> Dict[str, Any]:
     try:
+        vault_url = getattr(settings, "VAULT_URL", "http://vault:8200")
+        async with httpx.AsyncClient(timeout=5) as client:
+            health = (await client.get(f"{vault_url}/v1/sys/health")).json()
+        return {
+            "version":        health.get("version", "—"),
+            "initialized":    health.get("initialized", False),
+            "sealed":         health.get("sealed", True),
+            "cluster_name":   health.get("cluster_name", "—"),
+            "cluster_id":     health.get("cluster_id", "—"),
+            "storage_backend": "file",
+            "ui_url":         "http://localhost:8200/ui",
+            "actions": [
+                {"id": "health_check", "label": "Check Status", "variant": "default", "confirm": False},
+            ],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "actions": []}
+
+
+async def _detail_worker(queue_name: str) -> Dict[str, Any]:    try:
         user, password, host = _rmq_creds()
         async with httpx.AsyncClient(timeout=5) as client:
             res = await client.get(f"http://{host}:15672/api/queues/%2F/{queue_name}", auth=(user, password))
@@ -486,6 +540,8 @@ async def service_detail(
         return await _detail_minio()
     elif service_id == "ai-engine":
         return await _detail_ai_engine()
+    elif service_id == "vault":
+        return await _detail_vault()
     else:
         # worker-nmap, worker-zap, etc.
         queue = service_id.replace("worker-", "")
@@ -605,6 +661,18 @@ async def run_service_action(
                     "ok": res.status_code == 200,
                     "message": f"Model changed to {data.get('active_model', model)} via {data.get('active_provider', '?')}",
                 }
+
+    # ── Vault ────────────────────────────────────────────────────────────────
+    elif service_id == "vault":
+        vault_url = getattr(settings, "VAULT_URL", "http://vault:8200")
+        if action == "health_check":
+            async with httpx.AsyncClient(timeout=5) as client:
+                res = await client.get(f"{vault_url}/v1/sys/health")
+                data = res.json() if res.status_code in (200, 429, 472, 473, 501, 503) else {}
+                sealed = data.get("sealed", True)
+                initialized = data.get("initialized", False)
+                state = "unsealed" if (initialized and not sealed) else ("sealed" if initialized else "uninitialized")
+                return {"ok": not sealed, "message": f"Vault is {state} · v{data.get('version', '?')}"}
 
     # ── Workers ─────────────────────────────────────────────────────────────
     else:

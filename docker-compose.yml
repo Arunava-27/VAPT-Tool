@@ -106,6 +106,69 @@ services:
     restart: unless-stopped
 
   # =============================================================================
+  # Secrets Management — HashiCorp Vault
+  # =============================================================================
+
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: vapt-vault
+    hostname: vault
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK          # required — prevents secrets being swapped to disk
+    environment:
+      VAULT_ADDR: http://0.0.0.0:8200
+      VAULT_API_ADDR: http://vault:8200
+      VAULT_CLUSTER_ADDR: http://vault:8201
+    command: vault server -config=/vault/config/vault.hcl
+    volumes:
+      - vault_data:/vault/file            # encrypted secrets (persistent)
+      - ./vault/config:/vault/config:ro   # server config
+    ports:
+      - "8200:8200"
+    networks:
+      - backend-network
+      - data-network
+    healthcheck:
+      # vault status exits 0 only when initialized AND unsealed
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 10s
+      timeout: 5s
+      retries: 30         # high retries — vault-init needs time to unseal
+      start_period: 15s
+
+  vault-init:
+    image: hashicorp/vault:1.17
+    container_name: vapt-vault-init
+    restart: "no"         # one-shot: runs on every compose up, then exits
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_SKIP_VERIFY: "true"
+      # Credentials for seeding secrets
+      POSTGRES_DB: ${POSTGRES_DB:-vapt_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-vapt_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme123}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis123}
+      RABBITMQ_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-guest}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      SUPERUSER_EMAIL: ${SUPERUSER_EMAIL:-admin@vapt-platform.local}
+      SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD:-Admin@123}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    command: ["sh", "/vault/scripts/init.sh"]
+    volumes:
+      - vault_init_data:/vault/init       # unseal keys + tokens (persistent)
+      - ./vault/scripts:/vault/scripts:ro # init script (read-only)
+    networks:
+      - backend-network
+    depends_on:
+      vault:
+        condition: service_started        # start once vault container is up
+
+  # =============================================================================
   # Core Services
   # =============================================================================
 
@@ -600,6 +663,12 @@ volumes:
   
   ollama_data:
     name: vapt-ollama-data
+
+  vault_data:
+    name: vapt-vault-data           # encrypted Vault storage (persists across restarts/deletions)
+
+  vault_init_data:
+    name: vapt-vault-init-data      # unseal keys & tokens (KEEP THIS VOLUME — losing it = losing vault access)
   
   prometheus_data:
     name: vapt-prometheus-data

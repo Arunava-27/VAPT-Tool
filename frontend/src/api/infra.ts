@@ -4,7 +4,7 @@ export interface ServiceHealth {
   id: string
   name: string
   description?: string
-  category: 'database' | 'cache' | 'queue' | 'search' | 'storage' | 'backend' | 'worker'
+  category: 'database' | 'cache' | 'queue' | 'search' | 'storage' | 'backend' | 'worker' | 'secrets'
   status: 'healthy' | 'unhealthy' | 'unreachable' | 'degraded'
   latency_ms?: number
   error?: string
