@@ -36,6 +36,25 @@ class UserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=8)
 
 
+class ProfileUpdate(BaseModel):
+    """Schema for a user updating their own profile"""
+    full_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[EmailStr] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    """Schema for changing own password (requires current password)"""
+    current_password: str
+    new_password: str = Field(..., min_length=8, description="Must be at least 8 characters")
+    confirm_password: str
+
+    @validator('confirm_password')
+    def passwords_match(cls, v, values):
+        if 'new_password' in values and v != values['new_password']:
+            raise ValueError('Passwords do not match')
+        return v
+
+
 class UserInDB(UserBase):
     """User schema as stored in database"""
     id: str

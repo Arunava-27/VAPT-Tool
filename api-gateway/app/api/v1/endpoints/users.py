@@ -8,8 +8,8 @@ from typing import List
 
 from ....db.session import get_db
 from ....models.user import User
-from ....schemas.user import UserResponse, UserCreate, UserUpdate
-from ....core.security import hash_password
+from ....schemas.user import UserResponse, UserCreate, UserUpdate, ProfileUpdate, ChangePasswordRequest
+from ....core.security import hash_password, verify_password
 from .auth import get_current_active_user
 
 router = APIRouter()
@@ -21,6 +21,42 @@ async def get_current_user(
 ):
     """Get current user profile"""
     return current_user
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_own_profile(
+    profile_data: ProfileUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Update own profile (full_name and/or email)"""
+    update = profile_data.dict(exclude_unset=True)
+
+    if "email" in update and update["email"] != current_user.email:
+        existing = db.query(User).filter(User.email == update["email"]).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already in use")
+
+    for field, value in update.items():
+        setattr(current_user, field, value)
+
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_own_password(
+    password_data: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Change own password — requires current password for verification"""
+    if not verify_password(password_data.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    current_user.hashed_password = hash_password(password_data.new_password)
+    db.commit()
 
 
 @router.get("/", response_model=List[UserResponse])
