@@ -381,19 +381,25 @@ services:
     container_name: vapt-worker-nmap
     command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info", "--concurrency=4", "-Q", "nmap"]
     environment:
-      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@localhost:5672/
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@localhost:6379/0
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-vapt_user}:${POSTGRES_PASSWORD:-changeme123}@localhost:5432/${POSTGRES_DB:-vapt_platform}
-      - MINIO_ENDPOINT=localhost:9000
+      - CELERY_BROKER_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-vapt_user}:${POSTGRES_PASSWORD:-changeme123}@postgres:5432/${POSTGRES_DB:-vapt_platform}
+      - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin123}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./workers/nmap/app:/app/app
       - ./workers/base:/app/base
-    network_mode: "host"
+    networks:
+      - backend-network
+      - data-network
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       minio:
         condition: service_healthy

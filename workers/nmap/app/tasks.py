@@ -429,14 +429,33 @@ def node_scan(self, task_data):
 @celery_app.task(name="nmap.get_interfaces")
 def get_interfaces():
     """
-    Return network interfaces as seen by the nmap worker (host network mode).
-    Called by the API gateway to show the real LAN interfaces of the Docker host,
-    not the Docker bridge interfaces visible inside the gateway container.
+    Return network interfaces visible to the nmap worker.
+    Uses Python socket + iproute2 `ip` command (iproute2 is now installed in the Dockerfile).
+    Since the worker runs in Docker bridge networking (not host mode), these will be
+    Docker bridge IPs. The response also includes the default gateway to help identify
+    the host's LAN gateway IP.
     """
     import subprocess
     import re
 
     interfaces = []
+    gateway_ip = None
+
+    # Try `ip route` to get the default gateway
+    try:
+        gw_result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in gw_result.stdout.splitlines():
+            m = re.search(r"via\s+(\d+\.\d+\.\d+\.\d+)", line)
+            if m:
+                gateway_ip = m.group(1)
+                break
+    except Exception:
+        pass
+
+    # Get all interfaces via `ip -o addr show`
     try:
         result = subprocess.run(
             ["ip", "-o", "addr", "show"],
@@ -447,7 +466,7 @@ def get_interfaces():
             if len(parts) < 4:
                 continue
             iface = parts[1]
-            if iface in ("lo",):
+            if iface == "lo":
                 continue
             family = parts[2]
             if family != "inet":
@@ -457,7 +476,6 @@ def get_interfaces():
             octets = ip.split(".")
             network_range = f"{octets[0]}.{octets[1]}.{octets[2]}.0/{prefix}"
 
-            # Classify: private LAN or Docker bridge (172.16-31.x.x)
             is_docker = bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
             is_lan = (
                 ip.startswith("192.168.") or
@@ -475,6 +493,26 @@ def get_interfaces():
                 "is_lan": is_lan,
             })
     except Exception as e:
-        return {"interfaces": [], "error": str(e)}
+        # Fallback: use Python socket to get at least the container IP
+        try:
+            import socket
+            hostname = socket.gethostname()
+            host_ip = socket.gethostbyname(hostname)
+            octets = host_ip.split(".")
+            is_docker = bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", host_ip))
+            interfaces.append({
+                "interface": "eth0",
+                "ip": host_ip,
+                "prefix": 24,
+                "network_range": f"{octets[0]}.{octets[1]}.{octets[2]}.0/24",
+                "family": "ipv4",
+                "is_docker": is_docker,
+                "is_lan": False,
+            })
+        except Exception as e2:
+            return {"interfaces": [], "gateway_ip": None, "error": str(e2)}
 
-    return {"interfaces": interfaces}
+    return {
+        "interfaces": interfaces,
+        "gateway_ip": gateway_ip,
+    }

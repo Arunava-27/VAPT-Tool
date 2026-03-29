@@ -45,6 +45,7 @@ export interface HostInterfacesResponse {
   docker_only: boolean | null
   has_lan_access: boolean
   primary_range: string | null
+  gateway_ip: string | null
   error?: string
 }
 

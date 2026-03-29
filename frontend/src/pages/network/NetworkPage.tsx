@@ -12,6 +12,66 @@ import {
 import type { NetworkNode, NetworkScan, HostInterfacesResponse } from '../../api/network'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 
+// Suppress unused import warnings for icons used only in some branches
+void AlertTriangle
+
+// ─── Host IP input component ─────────────────────────────────────────────────
+function deriveRange(ip: string): string | null {
+  // Given any IP like 192.168.1.100, return 192.168.1.0/24
+  const parts = ip.trim().split('.')
+  if (parts.length !== 4 || parts.some(p => isNaN(Number(p)) || Number(p) < 0 || Number(p) > 255)) {
+    return null
+  }
+  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`
+}
+
+interface HostIPInputProps {
+  onRangeDetected: (range: string) => void
+}
+
+function HostIPInput({ onRangeDetected }: HostIPInputProps) {
+  const [ip, setIp] = useState('')
+  const [error, setError] = useState('')
+
+  const handleApply = () => {
+    const range = deriveRange(ip)
+    if (!range) {
+      setError('Enter a valid IPv4 address (e.g. 192.168.1.100)')
+      return
+    }
+    setError('')
+    onRangeDetected(range)
+    toast.success(`Scan range set to ${range}`)
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={ip}
+          onChange={e => { setIp(e.target.value); setError('') }}
+          onKeyDown={e => e.key === 'Enter' && handleApply()}
+          placeholder="Your host IP (e.g. 192.168.1.100)"
+          className="flex-1 bg-cyber-dark border border-cyber-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono focus:outline-none focus:border-cyber-primary transition-colors"
+        />
+        <button
+          onClick={handleApply}
+          className="px-4 py-2 rounded-lg bg-cyber-primary/10 border border-cyber-primary/30 text-cyber-primary text-xs font-medium hover:bg-cyber-primary/20 transition-colors whitespace-nowrap"
+        >
+          Use Range
+        </button>
+      </div>
+      {error && <p className="text-xs text-rose-400">{error}</p>}
+      {ip && deriveRange(ip) && (
+        <p className="text-xs text-slate-500">
+          → Will scan <span className="text-cyber-primary font-mono">{deriveRange(ip)}</span>
+        </p>
+      )}
+    </div>
+  )
+}
+
 // ─── Device type icon mapping ────────────────────────────────────────────────
 const DEVICE_ICONS: Record<string, React.ElementType> = {
   pc: Laptop,
@@ -426,7 +486,7 @@ export default function NetworkPage() {
       const res = await getHostInterfaces()
       setHostIfaces(res.data)
     } catch {
-      setHostIfaces({ interfaces: [], lan_interfaces: [], docker_only: null, has_lan_access: false, primary_range: null, error: 'Could not reach nmap worker' })
+      setHostIfaces({ interfaces: [], lan_interfaces: [], docker_only: null, has_lan_access: false, primary_range: null, gateway_ip: null, error: 'Could not reach nmap worker' })
     } finally {
       setIfacesLoading(false)
     }
@@ -584,78 +644,64 @@ export default function NetworkPage() {
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Cpu className="w-4 h-4 text-cyber-primary" />
-            <span className="text-sm font-medium text-slate-300">Scan Host Network</span>
-            <span className="text-xs text-slate-500">(interfaces visible to the nmap worker)</span>
+            <span className="text-sm font-medium text-slate-300">Network Target</span>
           </div>
           <button
             onClick={fetchHostInterfaces}
             disabled={ifacesLoading}
             className="p-1 text-slate-500 hover:text-white transition-colors"
-            title="Refresh interfaces"
+            title="Refresh worker status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${ifacesLoading ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
+        {/* Manual host IP input — primary method */}
+        <div className="mb-3">
+          <label className="text-xs text-slate-400 mb-1.5 block">
+            Enter your host machine's IP address to auto-derive the scan range:
+          </label>
+          <HostIPInput onRangeDetected={(range) => { setCustomRange(range); setShowRangeInput(true) }} />
+        </div>
+
+        {/* Worker status */}
         {ifacesLoading ? (
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <RefreshCw className="w-3 h-3 animate-spin" /> Querying nmap worker interfaces…
+          <div className="flex items-center gap-2 text-xs text-slate-500 pt-2 border-t border-cyber-border/50">
+            <RefreshCw className="w-3 h-3 animate-spin" /> Checking nmap worker…
           </div>
-        ) : hostIfaces?.error ? (
-          <div className="flex items-start gap-2 text-xs text-rose-400">
+        ) : hostIfaces?.error && !hostIfaces.interfaces.length ? (
+          <div className="flex items-start gap-2 text-xs text-rose-400 pt-2 border-t border-cyber-border/50">
             <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
               <p className="font-medium">Cannot reach nmap worker</p>
-              <p className="text-rose-400/70 mt-0.5">{hostIfaces.error}</p>
-              <p className="text-slate-500 mt-1">Make sure the nmap worker container is running: <code className="font-mono bg-black/30 px-1 rounded">docker compose up -d worker-nmap</code></p>
+              <p className="text-slate-500 mt-1">Run: <code className="font-mono bg-black/30 px-1 rounded">docker compose --profile workers up -d worker-nmap</code></p>
             </div>
           </div>
-        ) : hostIfaces?.docker_only ? (
-          <div className="flex items-start gap-2 text-xs">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <p className="font-medium text-amber-300">Docker host has no LAN interface</p>
-              <p className="text-slate-400 mt-1">
-                Only Docker bridge IPs detected ({hostIfaces.interfaces.map(i => i.ip).join(', ')}).
-                The Docker host machine is not connected to a physical LAN — network discovery will only find Docker containers.
-              </p>
-              <p className="text-slate-500 mt-1.5">
-                <strong className="text-slate-400">To resolve:</strong> Connect the Docker host machine to your target LAN (WiFi or Ethernet),
-                then enter the range manually below (e.g. <code className="font-mono bg-black/30 px-1 rounded">192.168.1.0/24</code>).
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        ) : hostIfaces ? (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-2 border-t border-cyber-border/50">
             <div className="flex items-center gap-1.5 text-xs text-emerald-400">
               <CheckCircle className="w-3.5 h-3.5" />
-              <span>LAN access detected</span>
+              <span>nmap worker online</span>
             </div>
-            {hostIfaces?.lan_interfaces.map((iface) => (
-              <div key={iface.interface} className="flex items-center gap-1.5">
-                <span className="px-1.5 py-0.5 rounded bg-cyber-primary/10 border border-cyber-primary/20 text-cyber-primary text-xs font-mono">
-                  {iface.interface}
-                </span>
-                <span className="text-slate-300 font-mono text-xs">{iface.ip}</span>
+            {hostIfaces.gateway_ip && (
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="text-slate-500">gateway:</span>
                 <button
-                  onClick={() => { setCustomRange(iface.network_range); setShowRangeInput(true) }}
-                  className="text-xs text-slate-500 hover:text-cyber-primary font-mono transition-colors"
-                  title="Use this range"
+                  onClick={() => { setCustomRange(hostIfaces.gateway_ip!.replace(/\.\d+$/, '.0') + '/24'); setShowRangeInput(true) }}
+                  className="font-mono text-cyber-primary hover:underline"
+                  title="Use gateway's /24 as scan range"
                 >
-                  {iface.network_range}
+                  {hostIfaces.gateway_ip}
                 </button>
               </div>
-            ))}
-            {(hostIfaces?.interfaces ?? []).filter(i => i.is_docker).map((iface) => (
-              <div key={iface.interface} className="flex items-center gap-1.5 opacity-40">
-                <span className="px-1.5 py-0.5 rounded bg-slate-700 border border-slate-600 text-slate-400 text-xs font-mono">
-                  {iface.interface} (docker)
-                </span>
-                <span className="text-slate-500 font-mono text-xs">{iface.ip}</span>
+            )}
+            {hostIfaces.interfaces.map((iface) => (
+              <div key={iface.interface} className="flex items-center gap-1 text-xs opacity-50">
+                <span className="font-mono text-slate-500">{iface.interface}: {iface.ip}</span>
               </div>
             ))}
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Active scan progress banner with Cancel */}

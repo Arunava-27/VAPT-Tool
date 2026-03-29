@@ -31,7 +31,8 @@ def _get_celery_app():
         from celery import Celery
         import os
         broker = os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@rabbitmq:5672/")
-        _celery_app = Celery(broker=broker, backend="rpc://")
+        backend = os.getenv("CELERY_RESULT_BACKEND", "redis://:redis123@redis:6379/0")
+        _celery_app = Celery(broker=broker, backend=backend)
     return _celery_app
 
 
@@ -245,6 +246,8 @@ async def host_interfaces(
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, lambda: task.get(timeout=10))
         ifaces = result.get("interfaces", []) if isinstance(result, dict) else []
+        gateway_ip = result.get("gateway_ip") if isinstance(result, dict) else None
+        err = result.get("error") if isinstance(result, dict) else None
         lan_ifaces = [i for i in ifaces if i.get("is_lan")]
         docker_only = len(ifaces) > 0 and len(lan_ifaces) == 0
         return {
@@ -253,6 +256,8 @@ async def host_interfaces(
             "docker_only": docker_only,
             "has_lan_access": len(lan_ifaces) > 0,
             "primary_range": lan_ifaces[0]["network_range"] if lan_ifaces else None,
+            "gateway_ip": gateway_ip,
+            "error": err,
         }
     except Exception as exc:
         return {
