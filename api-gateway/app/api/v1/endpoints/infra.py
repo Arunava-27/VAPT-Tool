@@ -480,7 +480,8 @@ async def _detail_vault() -> Dict[str, Any]:
         return {"error": str(exc), "actions": []}
 
 
-async def _detail_worker(queue_name: str) -> Dict[str, Any]:    try:
+async def _detail_worker(queue_name: str) -> Dict[str, Any]:
+    try:
         user, password, host = _rmq_creds()
         async with httpx.AsyncClient(timeout=5) as client:
             res = await client.get(f"http://{host}:15672/api/queues/%2F/{queue_name}", auth=(user, password))
