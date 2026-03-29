@@ -228,6 +228,8 @@ services:
     volumes:
       - ./api-gateway:/app
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    group_add:
+      - "0"
     networks:
       - frontend-network
       - backend-network
