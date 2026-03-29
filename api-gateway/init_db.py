@@ -74,14 +74,15 @@ def init_database():
         db.commit()
         logger.info(f"✓ Created {roles_created} system roles")
         
-        # Create superuser if SUPERUSER_EMAIL env var is explicitly set
-        # (e.g. for automated/CI deployments). In interactive deployments
-        # the first-run setup wizard (/api/v1/setup/init) handles this.
+        # Sync superuser from environment variables if set.
+        # If the user already exists → update the password hash so it stays in
+        # sync with what's in .env across container restarts.
+        # If the user does not exist → create it (automated / CI deployments).
         superuser_email = os.getenv("SUPERUSER_EMAIL", "")
         superuser_password = os.getenv("SUPERUSER_PASSWORD", "")
 
         if superuser_email and superuser_password:
-            existing_superuser = db.query(User).filter(User.is_superuser == True).first()  # noqa
+            existing_superuser = db.query(User).filter(User.email == superuser_email).first()
             if not existing_superuser:
                 logger.info("Creating superuser from environment variables...")
                 super_admin_role = db.query(Role).filter(Role.slug == "super_admin").first()
@@ -99,11 +100,13 @@ def init_database():
                 db.add(superuser)
                 db.commit()
                 logger.info(f"✓ Superuser created: {superuser_email}")
-                logger.info("  ⚠️  Please change the superuser password after first login!")
             else:
-                logger.info("Superuser already exists — skipping.")
+                # Always sync password from env so container restarts don't break login
+                existing_superuser.hashed_password = hash_password(superuser_password)
+                db.commit()
+                logger.info(f"✓ Superuser password synced from environment: {superuser_email}")
         else:
-            logger.info("No SUPERUSER_EMAIL set — skipping superuser creation.")
+            logger.info("No SUPERUSER_EMAIL set — skipping superuser sync.")
             logger.info("Visit the platform URL to complete first-run setup.")
 
         logger.info("\n" + "="*60)
