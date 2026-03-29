@@ -1,17 +1,10 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { Shield, LayoutDashboard, Search, Plus, Settings, LogOut, ChevronLeft, ChevronRight, Server, Users } from 'lucide-react'
 import { useDispatch, useSelector } from 'react-redux'
 import clsx from 'clsx'
 import type { RootState } from '../../store'
 import { toggleSidebar } from '../../store/slices/uiSlice'
 import { logout } from '../../store/slices/authSlice'
-
-const NAV = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/scans', icon: Search, label: 'Scans' },
-  { to: '/scans/new', icon: Plus, label: 'New Scan' },
-  { to: '/infra', icon: Server, label: 'Infrastructure' },
-]
 
 const ADMIN_NAV = [
   { to: '/admin/users', icon: Users, label: 'Users' },
@@ -24,6 +17,7 @@ const BOTTOM_NAV = [
 export default function Sidebar() {
   const dispatch = useDispatch()
   const navigate = useNavigate()
+  const location = useLocation()
   const open = useSelector((s: RootState) => s.ui.sidebarOpen)
   const user = useSelector((s: RootState) => s.auth.user)
 
@@ -31,9 +25,11 @@ export default function Sidebar() {
     ? user.full_name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2)
     : user?.email?.slice(0, 2).toUpperCase() ?? 'VP'
 
-  function NavItem({ to, icon: Icon, label }: { to: string; icon: React.ElementType; label: string }) {
+  const isScansActive = location.pathname.startsWith('/scans')
+
+  function NavItem({ to, icon: Icon, label, end }: { to: string; icon: React.ElementType; label: string; end?: boolean }) {
     return (
-      <NavLink to={to}
+      <NavLink to={to} end={end}
         className={({ isActive }) => clsx(
           'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50',
           isActive
@@ -56,7 +52,50 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 py-4 space-y-1 px-2 overflow-y-auto">
-        {NAV.map(item => <NavItem key={item.to} {...item} />)}
+        <NavItem to="/dashboard" icon={LayoutDashboard} label="Dashboard" end />
+
+        {/* Scans group */}
+        <NavLink to="/scans" end
+          className={clsx(
+            'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50 border',
+            isScansActive
+              ? 'bg-cyber-primary/10 text-cyber-primary border-cyber-primary/20'
+              : 'text-slate-400 hover:text-white hover:bg-cyber-border border-transparent'
+          )}>
+          <Search className="w-4 h-4 flex-shrink-0" />
+          {open && <span>Scans</span>}
+        </NavLink>
+
+        {/* New Scan — sub-item of Scans */}
+        {open ? (
+          <NavLink to="/scans/new"
+            className={({ isActive }) => clsx(
+              'flex items-center gap-3 pl-8 pr-3 py-2 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50 border ml-1',
+              isActive
+                ? 'bg-cyber-primary/10 text-cyber-primary border-cyber-primary/20'
+                : 'text-slate-500 hover:text-slate-200 hover:bg-cyber-border border-transparent'
+            )}>
+            <Plus className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>New Scan</span>
+          </NavLink>
+        ) : (
+          /* Collapsed: show as small icon below Scans with a connector dot */
+          <div className="flex flex-col items-center">
+            <div className="w-px h-2 bg-cyber-border/60" />
+            <NavLink to="/scans/new"
+              title="New Scan"
+              className={({ isActive }) => clsx(
+                'flex items-center justify-center w-8 h-8 rounded-lg text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50 border',
+                isActive
+                  ? 'bg-cyber-primary/10 text-cyber-primary border-cyber-primary/20'
+                  : 'text-slate-500 hover:text-slate-200 hover:bg-cyber-border border-transparent'
+              )}>
+              <Plus className="w-3.5 h-3.5" />
+            </NavLink>
+          </div>
+        )}
+
+        <NavItem to="/infra" icon={Server} label="Infrastructure" />
 
         {/* Admin section — super admin only */}
         {user?.is_superuser && (
@@ -89,11 +128,13 @@ export default function Sidebar() {
           </div>
         )}
         <button onClick={() => { dispatch(logout()); navigate('/login') }}
+          aria-label="Logout"
           className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50">
           <LogOut className="w-4 h-4 flex-shrink-0" />
           {open && <span>Logout</span>}
         </button>
         <button onClick={() => dispatch(toggleSidebar())}
+          aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
           className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-cyber-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50">
           {open ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           {open && <span className="text-xs">Collapse</span>}
