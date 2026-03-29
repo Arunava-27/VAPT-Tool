@@ -134,7 +134,7 @@ export default function UsersPage() {
           <p className="text-sm text-slate-500 mt-0.5">Manage platform accounts and their roles</p>
         </div>
         <button onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black text-sm font-semibold transition-colors">
+          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyber-primary hover:bg-cyan-300 text-cyber-bg text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50">
           <UserPlus className="w-4 h-4" /> Add User
         </button>
       </div>
@@ -208,13 +208,14 @@ export default function UsersPage() {
       {/* Create user modal */}
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-[#0d1426] border border-[#1e2d4a] rounded-2xl w-full max-w-md p-6">
+          <div className="bg-cyber-surface border border-cyber-border rounded-2xl w-full max-w-md p-6">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-sm font-semibold text-white flex items-center gap-2">
                 <UserPlus className="w-4 h-4 text-cyan-400" /> Create New User
               </h2>
               <button onClick={() => { setShowCreate(false); setCError(null) }}
-                className="p-1 rounded text-slate-500 hover:text-white transition-colors">
+                aria-label="Close modal"
+                className="p-1 rounded text-slate-500 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -223,19 +224,20 @@ export default function UsersPage() {
               <div className="space-y-1.5">
                 <label className="text-xs text-slate-400">Full Name</label>
                 <input value={cFullName} onChange={e => setCFullName(e.target.value)} placeholder="Jane Smith"
-                  className="w-full bg-[#060d1a] border border-[#1e2d4a] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition-colors" />
+                  className="w-full bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyber-primary transition-colors" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs text-slate-400">Email Address</label>
                 <input type="email" value={cEmail} onChange={e => setCEmail(e.target.value)} placeholder="jane@company.com"
-                  className="w-full bg-[#060d1a] border border-[#1e2d4a] rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition-colors" />
+                  className="w-full bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyber-primary transition-colors" />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs text-slate-400">Temporary Password</label>
                 <div className="relative">
                   <input type={cShowPwd ? 'text' : 'password'} value={cPassword} onChange={e => setCPassword(e.target.value)} placeholder="Min. 8 characters"
-                    className="w-full bg-[#060d1a] border border-[#1e2d4a] rounded-lg px-3 py-2 pr-9 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 transition-colors" />
+                    className="w-full bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 pr-9 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyber-primary transition-colors" />
                   <button type="button" onClick={() => setCShowPwd(p => !p)}
+                    aria-label={cShowPwd ? 'Hide password' : 'Show password'}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors">
                     {cShowPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -244,7 +246,7 @@ export default function UsersPage() {
               <div className="space-y-1.5">
                 <label className="text-xs text-slate-400">Role</label>
                 <select value={cRoleId} onChange={e => setCRoleId(e.target.value)}
-                  className="w-full bg-[#060d1a] border border-[#1e2d4a] rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors">
+                  className="w-full bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyber-primary transition-colors">
                   {roles.map(r => (
                     <option key={r.id} value={r.id}>{r.name}{r.description ? ` — ${r.description}` : ''}</option>
                   ))}
@@ -263,7 +265,7 @@ export default function UsersPage() {
                   Cancel
                 </button>
                 <button type="submit" disabled={cLoading}
-                  className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black text-sm font-semibold transition-colors disabled:opacity-50">
+                  className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-cyber-primary hover:bg-cyan-300 text-cyber-bg text-sm font-semibold transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50">
                   {cLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
                   Create User
                 </button>

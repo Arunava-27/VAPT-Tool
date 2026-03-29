@@ -125,10 +125,10 @@ function ServiceCard({ svc, onClick }: { svc: ServiceHealth; onClick: () => void
             <span className="text-cyber-primary font-mono truncate max-w-[140px]">{svc.active_model}</span>
           </div>
         )}
-        {svc.active_provider && !svc.active_model && (
+        {svc.active_provider && (
           <div className="flex justify-between items-center">
             <span className="text-slate-500">Provider</span>
-            <span className="text-slate-300">{svc.active_provider}</span>
+            <span className="text-slate-300 capitalize">{svc.active_provider}</span>
           </div>
         )}
         {svc.tasks_processed && Object.keys(svc.tasks_processed).length > 0 && (

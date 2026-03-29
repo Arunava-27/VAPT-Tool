@@ -77,6 +77,7 @@ export default function ScansPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
           <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(0) }}
             placeholder="Search scans…"
+            aria-label="Search scans"
             className="bg-cyber-surface border border-cyber-border rounded-lg pl-8 pr-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyber-primary w-56" />
         </div>
         <div className="flex gap-1">
@@ -103,6 +104,7 @@ export default function ScansPage() {
             action={<Link to="/scans/new" className="text-sm text-cyber-primary hover:underline">New Scan →</Link>} />
         ) : (
           <>
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-cyber-border">
@@ -146,6 +148,7 @@ export default function ScansPage() {
                 ))}
               </tbody>
             </table>
+            </div>
             {totalPages > 1 && (
               <div className="flex items-center justify-between px-5 py-3 border-t border-cyber-border">
                 <span className="text-xs text-slate-500">Page {page + 1} of {totalPages}</span>

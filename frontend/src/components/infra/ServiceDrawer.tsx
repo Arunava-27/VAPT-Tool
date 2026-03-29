@@ -66,19 +66,19 @@ function ActionButton({
     action.variant === 'danger'
       ? confirming
         ? 'border-rose-500 bg-rose-500/20 text-rose-300 animate-pulse'
-        : 'border-rose-500/30 text-rose-400 hover:bg-rose-500/10'
+        : 'border-rose-500/30 text-rose-400 hover:bg-rose-500/10 focus-visible:ring-rose-500/40'
       : action.variant === 'info'
-      ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10'
+      ? 'border-blue-500/30 text-blue-400 hover:bg-blue-500/10 focus-visible:ring-blue-500/40'
       : action.variant === 'warning'
-      ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/10'
-      : 'border-cyber-border text-slate-300 hover:border-cyber-primary hover:text-cyber-primary'
+      ? 'border-amber-500/30 text-amber-400 hover:bg-amber-500/10 focus-visible:ring-amber-500/40'
+      : 'border-cyber-border text-slate-300 hover:border-cyber-primary hover:text-cyber-primary focus-visible:ring-cyber-primary/40'
 
   return (
     <div className="space-y-1">
       <button
         onClick={handleClick}
         disabled={loading}
-        className={`flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-lg border text-xs font-medium transition-colors disabled:opacity-50 ${variantCls}`}
+        className={`flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-lg border text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 ${variantCls}`}
       >
         {loading && <RefreshCw className="w-3 h-3 animate-spin" />}
         {confirming ? `⚠ Confirm: ${action.label}` : action.label}
@@ -432,6 +432,7 @@ export default function ServiceDrawer({ svc, onClose }: Props) {
     <>
       {/* backdrop */}
       <div
+        aria-hidden="true"
         onClick={onClose}
         className={`fixed inset-0 bg-black/50 z-40 transition-opacity duration-200 ${
           isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
@@ -440,6 +441,9 @@ export default function ServiceDrawer({ svc, onClose }: Props) {
 
       {/* slide-over panel */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={svc ? `${svc.name} service details` : 'Service details'}
         className={`fixed top-0 right-0 h-full w-full max-w-md bg-cyber-surface border-l border-cyber-border z-50 flex flex-col shadow-2xl transition-transform duration-300 ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
@@ -462,13 +466,15 @@ export default function ServiceDrawer({ svc, onClose }: Props) {
                   onClick={() => load(svc.id)}
                   disabled={loading}
                   title="Refresh"
-                  className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-cyber-border transition-colors disabled:opacity-40"
+                  aria-label="Refresh service details"
+                  className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-cyber-border transition-colors disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50"
                 >
                   <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                 </button>
                 <button
                   onClick={onClose}
-                  className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-cyber-border transition-colors"
+                  aria-label="Close drawer"
+                  className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-cyber-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -476,7 +482,7 @@ export default function ServiceDrawer({ svc, onClose }: Props) {
             </div>
 
             {/* status banner */}
-            <div className="px-5 pt-4">
+            <div className="px-5 pt-4 pb-3">
               {svc.status !== 'healthy' ? (
                 <div className="flex items-start gap-2 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2.5">
                   <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
@@ -491,7 +497,7 @@ export default function ServiceDrawer({ svc, onClose }: Props) {
             </div>
 
             {/* scrollable body */}
-            <div className="flex-1 overflow-y-auto px-5 pb-8">
+            <div className="flex-1 overflow-y-auto px-5 pt-1 pb-8 border-t border-cyber-border/50">
               {loading && (
                 <div className="flex justify-center py-12"><LoadingSpinner size="md" /></div>
               )}

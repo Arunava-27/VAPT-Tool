@@ -52,7 +52,7 @@ export default function LoginPage() {
         <div className="bg-cyber-surface border border-cyber-border rounded-2xl p-8 shadow-2xl">
           {/* Logo */}
           <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mb-4">
+            <div className="w-14 h-14 rounded-2xl bg-cyber-primary/10 border border-cyber-primary/20 flex items-center justify-center mb-4">
               <Shield className="w-7 h-7 text-cyber-primary" />
             </div>
             <h1 className="text-2xl font-bold text-white">VAPT Platform</h1>
@@ -83,6 +83,7 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(v => !v)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
                   tabIndex={-1}
                 >

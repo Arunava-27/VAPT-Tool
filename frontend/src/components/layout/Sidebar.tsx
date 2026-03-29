@@ -35,10 +35,10 @@ export default function Sidebar() {
     return (
       <NavLink to={to}
         className={({ isActive }) => clsx(
-          'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+          'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50',
           isActive
-            ? 'bg-cyan-500/10 text-cyber-primary border border-cyan-500/20'
-            : 'text-slate-400 hover:text-white hover:bg-cyber-border'
+            ? 'bg-cyber-primary/10 text-cyber-primary border border-cyber-primary/20'
+            : 'text-slate-400 hover:text-white hover:bg-cyber-border border border-transparent'
         )}>
         <Icon className="w-4 h-4 flex-shrink-0" />
         {open && <span>{label}</span>}
@@ -89,12 +89,12 @@ export default function Sidebar() {
           </div>
         )}
         <button onClick={() => { dispatch(logout()); navigate('/login') }}
-          className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors">
+          className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50">
           <LogOut className="w-4 h-4 flex-shrink-0" />
           {open && <span>Logout</span>}
         </button>
         <button onClick={() => dispatch(toggleSidebar())}
-          className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-cyber-border transition-colors">
+          className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-white hover:bg-cyber-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyber-primary/50">
           {open ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           {open && <span className="text-xs">Collapse</span>}
         </button>
