@@ -53,7 +53,7 @@ function HostIPInput({ onRangeDetected }: HostIPInputProps) {
           onChange={e => { setIp(e.target.value); setError('') }}
           onKeyDown={e => e.key === 'Enter' && handleApply()}
           placeholder="Your host IP (e.g. 192.168.1.100)"
-          className="flex-1 bg-cyber-dark border border-cyber-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono focus:outline-none focus:border-cyber-primary transition-colors"
+          className="flex-1 bg-[#070c1a] border border-cyber-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 font-mono focus:outline-none focus:border-cyber-primary transition-colors"
         />
         <button
           onClick={handleApply}

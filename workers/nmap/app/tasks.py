@@ -142,27 +142,40 @@ def nmap_scan(self, task_data):
         )
 
 
-def _guess_device_type(mac: str, hostname: str) -> str:
-    """Guess device type from MAC OUI prefix and hostname."""
+def _guess_device_type(mac: str, hostname: str, gateway_ips: set = None) -> str:
+    """Guess device type from IP (gateway check), MAC OUI prefix, and hostname."""
+    # Gateway IPs are always routers
+    if gateway_ips and mac is None:
+        # If no MAC, it might be us or the gateway — skip
+        pass
+
     if hostname:
         h = hostname.lower()
-        if any(x in h for x in ["router", "gateway", "gw", "rt-", "rtr"]):
+        if any(x in h for x in ["router", "gateway", "gw", "rt-", "rtr", "dlink", "tp-link", "linksys", "netgear", "asus", "mikrotik", "ubnt", "unifi", "edgerouter", "airmax"]):
             return "router"
-        if any(x in h for x in ["switch", "sw-", "sw."]):
+        if any(x in h for x in ["switch", "sw-", "sw.", "cisco", "catalyst", "nexus"]):
             return "switch"
-        if any(x in h for x in ["server", "srv", "nas", "storage"]):
+        if any(x in h for x in ["server", "srv", "nas", "storage", "synology", "qnap"]):
             return "server"
-        if any(x in h for x in ["android", "iphone", "ipad", "pixel", "samsung-m", "oneplus"]):
+        if any(x in h for x in ["android", "iphone", "ipad", "pixel", "samsung-m", "oneplus", "xiaomi", "huawei", "oppo", "vivo", "realme"]):
             return "mobile"
-        if any(x in h for x in ["printer", "print", "hp-", "epson", "canon-"]):
+        if any(x in h for x in ["printer", "print", "hp-", "epson", "canon-", "brother", "ricoh"]):
             return "printer"
-        if any(x in h for x in ["camera", "cam-", "nvr", "dvr"]):
+        if any(x in h for x in ["camera", "cam-", "nvr", "dvr", "hikvision", "dahua", "ring", "nest-cam"]):
             return "iot"
     if mac:
         oui = mac[:8].upper()
-        if oui in ["D8:07:B6", "50:C7:BF", "E4:8D:8C", "B0:BE:76", "A4:2B:B0", "00:50:56", "08:00:27"]:
+        # Common router/AP vendors
+        router_ouis = {
+            "D8:07:B6", "50:C7:BF", "E4:8D:8C", "B0:BE:76", "A4:2B:B0",
+            "F8:1A:67", "E0:28:6D", "00:50:56", "08:00:27", "A0:63:91",
+            "10:C3:7B", "00:1D:AA", "00:26:B9", "C8:D7:19", "68:7F:74",
+            "18:A6:F7", "BC:76:70", "D4:6E:0E", "30:B4:9E", "B0:4E:26",
+        }
+        if oui in router_ouis:
             return "router"
-        if oui[:5] in ["AC:BC", "DC:2B", "A4:C3", "04:D3"]:
+        mobile_prefixes = ["AC:BC", "DC:2B", "A4:C3", "04:D3", "02:00", "3A:93", "4A:15"]
+        if any(mac.upper().startswith(p) for p in mobile_prefixes):
             return "mobile"
     return "pc"
 
@@ -200,6 +213,23 @@ def network_discover(self, task_data):
         except Exception:
             network_range = "192.168.1.0/24"
 
+    # Detect default gateway IPs for correct device classification
+    gateway_ips = set()
+    try:
+        gw_result = subprocess.run(
+            ["ip", "route", "show"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in gw_result.stdout.splitlines():
+            m = re.search(r'via\s+(\d+\.\d+\.\d+\.\d+)', line)
+            if m:
+                gateway_ips.add(m.group(1))
+    except Exception:
+        # Guess gateway as .1 of the range
+        base = network_range.split('/')[0].rsplit('.', 1)[0]
+        gateway_ips.add(f"{base}.1")
+        gateway_ips.add(f"{base}.254")
+
     conn = None
     cur = None
     try:
@@ -214,8 +244,26 @@ def network_discover(self, task_data):
             )
             conn.commit()
 
-        cmd = ["nmap", "-sn", "--send-ip", "-T4", "--host-timeout", "10s", "-oX", "-", network_range]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        # Multi-probe discovery: ICMP echo + TCP SYN to common ports + TCP ACK
+        # This finds WiFi/mobile devices that block ICMP pings.
+        # --send-ip: use IP-level probes (required when not on same L2 subnet, e.g. Docker bridge)
+        # -PE: ICMP echo  -PP: ICMP timestamp  -PM: ICMP netmask
+        # -PS: TCP SYN    -PA: TCP ACK          -PU: UDP
+        cmd = [
+            "nmap", "-sn",
+            "--send-ip",
+            "-PE", "-PP",
+            "-PS22,23,25,53,80,110,135,139,143,443,445,3389,5900,8080,8443",
+            "-PA80,443,3389",
+            "-PU53,67,137,161",
+            "-T4",
+            "--host-timeout", "30s",
+            "--min-parallelism", "20",
+            "--max-retries", "2",
+            "-oX", "-",
+            network_range,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         xml_out = result.stdout
 
         nodes = []
@@ -239,7 +287,12 @@ def network_discover(self, task_data):
 
                 hostname_el = host.find(".//hostname")
                 hostname = hostname_el.get("name") if hostname_el is not None else None
-                device_type = _guess_device_type(mac, hostname)
+
+                # Classify: gateway IPs → router regardless of MAC/hostname
+                if ip in gateway_ips:
+                    device_type = "router"
+                else:
+                    device_type = _guess_device_type(mac, hostname, gateway_ips)
 
                 cur.execute("""
                     INSERT INTO network_nodes
