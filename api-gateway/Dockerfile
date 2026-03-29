@@ -32,15 +32,20 @@ COPY --from=builder /wheels/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r /tmp/requirements.txt \
     && rm -rf /wheels /tmp/requirements.txt
 
-# Copy application
+# Copy application and migration scripts
 COPY app/ app/
+COPY alembic/ alembic/
+COPY alembic.ini alembic.ini
+COPY init_db.py init_db.py
+COPY entrypoint.sh entrypoint.sh
 
 # Set environment
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # Change ownership
-RUN chown -R apigateway:apigateway /app
+RUN chown -R apigateway:apigateway /app \
+    && chmod +x /app/entrypoint.sh
 
 # Switch to non-root user
 USER apigateway
@@ -52,5 +57,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run entrypoint (runs init_db + alembic, then starts uvicorn)
+CMD ["/app/entrypoint.sh"]

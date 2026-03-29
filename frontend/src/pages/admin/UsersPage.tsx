@@ -10,7 +10,9 @@ interface UserRow {
   full_name: string | null
   is_active: boolean
   is_superuser: boolean
+  is_verified: boolean
   role_names: string[]
+  tenant_id: string
   created_at: string
 }
 
@@ -52,19 +54,27 @@ export default function UsersPage() {
   const [cError, setCError] = useState<string | null>(null)
 
   async function loadData() {
-    try {
-      const [usersRes, rolesData] = await Promise.all([
-        apiClient.get('/api/v1/users/'),
-        listRoles(),
-      ])
-      setUsers(usersRes.data)
-      setRoles(rolesData)
-      if (rolesData.length && !cRoleId) setCRoleId(rolesData.find(r => r.slug === 'analyst')?.id ?? rolesData[0].id)
-    } catch {
+    // Fetch users and roles independently so one failure doesn't block the other
+    const [usersResult, rolesResult] = await Promise.allSettled([
+      apiClient.get('/api/v1/users/'),
+      listRoles(),
+    ])
+
+    if (usersResult.status === 'fulfilled') {
+      setUsers(usersResult.value.data)
+    } else {
       toast.error('Failed to load users.')
-    } finally {
-      setLoading(false)
     }
+
+    if (rolesResult.status === 'fulfilled') {
+      const rolesData = rolesResult.value
+      setRoles(rolesData)
+      if (rolesData.length) setCRoleId(rolesData.find((r: { slug: string }) => r.slug === 'analyst')?.id ?? rolesData[0].id)
+    } else {
+      toast.error('Failed to load roles.')
+    }
+
+    setLoading(false)
   }
 
   useEffect(() => { loadData() }, []) // eslint-disable-line
@@ -77,11 +87,8 @@ export default function UsersPage() {
     if (cPassword.length < 8) return setCError('Password must be at least 8 characters.')
     if (!cRoleId) return setCError('Please select a role.')
 
-    // Grab tenant_id from the first user in the list (they share the default tenant)
-    const tenantId = users.length > 0
-      ? await apiClient.get(`/api/v1/users/${users[0].id}`).then(r => r.data.tenant_id).catch(() => null)
-      : null
-
+    // Use tenant_id from the already-loaded users list (no extra API call needed)
+    const tenantId = users.length > 0 ? users[0].tenant_id : null
     if (!tenantId) return setCError('Could not determine tenant. Please try again.')
 
     setCLoading(true)

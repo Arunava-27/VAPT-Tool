@@ -3,6 +3,7 @@ User model for authentication and authorization
 """
 
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 import uuid
@@ -19,7 +20,7 @@ class User(Base):
     """
     __tablename__ = "users"
     
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(PGUUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
     email = Column(String(255), nullable=False, unique=True, index=True)
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(255))
@@ -30,7 +31,7 @@ class User(Base):
     is_verified = Column(Boolean, default=False, nullable=False)
     
     # Multi-tenancy
-    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(PGUUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     
     # Password reset
     reset_token = Column(String(255), nullable=True)

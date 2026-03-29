@@ -3,7 +3,7 @@ Report model for storing generated security scan reports.
 """
 
 from sqlalchemy import Column, String, Text, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from datetime import datetime, timezone
 import uuid
 
@@ -19,16 +19,16 @@ class Report(Base):
 
     __tablename__ = "reports"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    scan_id = Column(String(36), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scan_id = Column(UUID(as_uuid=False), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(500), nullable=False)
-    report_type = Column(String(50), default="full", nullable=True)     # full/executive/technical
-    status = Column(String(50), default="generating", nullable=True, index=True)  # generating/ready/failed
-    format = Column(String(20), default="json", nullable=True)           # json/html/pdf
-    content = Column(JSONB, nullable=True)                                # structured report data
-    file_path = Column(String(500), nullable=True)                        # MinIO path for HTML/PDF
-    generated_by = Column(String(50), default="ai", nullable=True)       # ai/manual
-    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    report_type = Column(String(50), default="full", nullable=True)
+    status = Column(String(50), default="generating", nullable=True, index=True)
+    format = Column(String(20), default="json", nullable=True)
+    content = Column(JSONB, nullable=True)
+    file_path = Column(String(500), nullable=True)
+    generated_by = Column(String(50), default="ai", nullable=True)
+    tenant_id = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 

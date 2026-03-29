@@ -86,8 +86,14 @@ def _minio_ready() -> bool:
 # ---------------------------------------------------------------------------
 
 def run_alembic_migrations() -> bool:
-    """Run alembic upgrade head."""
-    print("\n📦 Running Alembic migrations...")
+    """
+    Run alembic upgrade head.
+
+    NOTE: Migrations are now the api-gateway's responsibility (entrypoint.sh
+    runs init_db.py + alembic before uvicorn starts).  data-layer-init attempts
+    this for completeness but treats failure as a warning, not a fatal error.
+    """
+    print("\n📦 Running Alembic migrations (best-effort)...")
     result = subprocess.run(
         ["alembic", "upgrade", "head"],
         capture_output=True,
@@ -98,8 +104,9 @@ def run_alembic_migrations() -> bool:
     if result.returncode == 0:
         print("  ✅ Migrations applied successfully")
         return True
-    print(f"  ❌ Migrations failed:\n{result.stderr.strip()}")
-    return False
+    # Non-fatal: api-gateway will handle migrations on its own startup
+    print(f"  ⚠️  Migrations skipped (will be applied by api-gateway): {result.stderr.strip()[:200]}")
+    return True  # Return True so the overall init doesn't fail
 
 
 def setup_elasticsearch() -> bool:

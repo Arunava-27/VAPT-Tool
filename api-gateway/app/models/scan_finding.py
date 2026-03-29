@@ -3,7 +3,7 @@ ScanFinding model — denormalised findings table for fast querying and AI analy
 """
 
 from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from datetime import datetime, timezone
 import uuid
 
@@ -19,10 +19,10 @@ class ScanFinding(Base):
 
     __tablename__ = "scan_findings"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    scan_id = Column(String(36), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scan_id = Column(UUID(as_uuid=False), ForeignKey("scans.id", ondelete="CASCADE"), nullable=False, index=True)
     vulnerability_id = Column(
-        String(36), ForeignKey("vulnerabilities.id", ondelete="CASCADE"), nullable=True
+        UUID(as_uuid=False), ForeignKey("vulnerabilities.id", ondelete="CASCADE"), nullable=True
     )
     tool = Column(String(50), nullable=False, index=True)
     finding_type = Column(String(100), nullable=True)
@@ -32,7 +32,7 @@ class ScanFinding(Base):
     service = Column(String(100), nullable=True)
     raw_data = Column(JSONB, nullable=True)
     ai_analysis = Column(JSONB, nullable=True)
-    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
+    tenant_id = Column(UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     def __repr__(self) -> str:

@@ -3,6 +3,7 @@ Role model for RBAC (Role-Based Access Control)
 """
 
 from sqlalchemy import Column, String, Boolean, DateTime, Text, Table, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 import uuid
@@ -14,8 +15,8 @@ from ..db.session import Base
 user_roles = Table(
     'user_roles',
     Base.metadata,
-    Column('user_id', String(36), ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
-    Column('role_id', String(36), ForeignKey('roles.id', ondelete='CASCADE'), primary_key=True)
+    Column('user_id', PGUUID(as_uuid=False), ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
+    Column('role_id', PGUUID(as_uuid=False), ForeignKey('roles.id', ondelete='CASCADE'), primary_key=True)
 )
 
 
@@ -27,13 +28,13 @@ class Role(Base):
     """
     __tablename__ = "roles"
     
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(PGUUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(100), nullable=False, unique=True, index=True)
     slug = Column(String(100), nullable=False, unique=True, index=True)
     description = Column(Text)
     
-    # Permissions (stored as JSON string)
-    permissions = Column(Text, nullable=False, default='[]')
+    # Permissions (stored as JSONB)
+    permissions = Column(JSONB, nullable=False, default=list)
     
     # Status
     is_active = Column(Boolean, default=True, nullable=False)

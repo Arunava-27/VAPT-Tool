@@ -64,7 +64,7 @@ def init_database():
                     name=role_data["name"],
                     slug=role_data["slug"],
                     description=role_data["description"],
-                    permissions=json.dumps(role_data["permissions"]),
+                    permissions=role_data["permissions"],
                     is_system_role=True,
                     is_active=True
                 )
