@@ -1,9 +1,10 @@
-import { useFieldArray, useForm } from 'react-hook-form'
+import { useState } from 'react'
+import { useFieldArray, useForm, useWatch } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useNavigate } from 'react-router-dom'
 import { useDispatch } from 'react-redux'
-import { Plus, Trash2, ArrowLeft } from 'lucide-react'
+import { Plus, Trash2, ArrowLeft, Calendar } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { createScan } from '../../api/scans'
 import { addScan } from '../../store/slices/scansSlice'
@@ -31,12 +32,51 @@ export default function NewScanPage() {
     defaultValues: { scan_type: 'network', targets: [{ type: 'hostname', value: '' }] },
   })
   const { fields, append, remove } = useFieldArray({ control, name: 'targets' })
+  const scanType = useWatch({ control, name: 'scan_type' })
+
+  // ZAP web scan extra options (not in zod schema - added to scan_config manually)
+  const [zapAuth, setZapAuth] = useState<'none' | 'form' | 'header'>('none')
+  const [zapLoginUrl, setZapLoginUrl] = useState('')
+  const [zapUsername, setZapUsername] = useState('')
+  const [zapPassword, setZapPassword] = useState('')
+  const [zapHeaderName, setZapHeaderName] = useState('Authorization')
+  const [zapHeaderValue, setZapHeaderValue] = useState('')
+  const [zapScanMode, setZapScanMode] = useState<'passive' | 'active'>('active')
+
+  // Scheduling
+  const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now')
+  const [scheduledAt, setScheduledAt] = useState('')
 
   const onSubmit = async (data: FormData) => {
     try {
-      const res = await createScan(data)
+      const scan_config: Record<string, unknown> = {}
+
+      if (data.scan_type === 'web') {
+        scan_config.zap_auth = zapAuth
+        scan_config.zap_scan_mode = zapScanMode
+        if (zapAuth === 'form') {
+          scan_config.zap_login_url = zapLoginUrl
+          scan_config.zap_username = zapUsername
+          scan_config.zap_password = zapPassword
+        } else if (zapAuth === 'header') {
+          scan_config.zap_header_name = zapHeaderName
+          scan_config.zap_header_value = zapHeaderValue
+        }
+      }
+
+      if (scheduleMode === 'later' && scheduledAt) {
+        scan_config.scheduled_at = scheduledAt
+      }
+
+      const res = await createScan({
+        name: data.name,
+        description: data.description,
+        scan_type: data.scan_type,
+        targets: data.targets,
+        scan_config: Object.keys(scan_config).length ? scan_config : undefined,
+      })
       dispatch(addScan(res.data))
-      toast.success('Scan started!')
+      toast.success(scheduleMode === 'later' ? 'Scan scheduled!' : 'Scan started!')
       navigate(`/scans/${res.data.id}`)
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -82,6 +122,70 @@ export default function NewScanPage() {
           </select>
         </div>
 
+        {/* ZAP Web Scan Options */}
+        {scanType === 'web' && (
+          <div className="border border-cyber-border rounded-lg p-4 space-y-4 bg-cyber-bg/50">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">ZAP Web Scan Options</p>
+
+            {/* Scan Mode */}
+            <div>
+              <label className={labelCls}>Scan Mode</label>
+              <div className="flex gap-3">
+                {([['active', 'Active + Passive (recommended)'], ['passive', 'Passive Only']] as const).map(([val, lbl]) => (
+                  <label key={val} className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" value={val} checked={zapScanMode === val} onChange={() => setZapScanMode(val)} className="accent-cyber-primary" />
+                    <span className="text-sm text-slate-300">{lbl}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Authentication */}
+            <div>
+              <label className={labelCls}>Authentication</label>
+              <select value={zapAuth} onChange={e => setZapAuth(e.target.value as typeof zapAuth)} className={inputCls}>
+                <option value="none">None</option>
+                <option value="form">Form-based</option>
+                <option value="header">Header-based</option>
+              </select>
+            </div>
+
+            {zapAuth === 'form' && (
+              <div className="space-y-3 pl-3 border-l border-cyber-border">
+                <div>
+                  <label className={labelCls}>Login URL</label>
+                  <input type="url" value={zapLoginUrl} onChange={e => setZapLoginUrl(e.target.value)} className={inputCls} placeholder="https://example.com/login" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>Username</label>
+                    <input type="text" value={zapUsername} onChange={e => setZapUsername(e.target.value)} className={inputCls} placeholder="admin" />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Password</label>
+                    <input type="password" value={zapPassword} onChange={e => setZapPassword(e.target.value)} className={inputCls} placeholder="••••••••" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {zapAuth === 'header' && (
+              <div className="space-y-3 pl-3 border-l border-cyber-border">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>Header Name</label>
+                    <input type="text" value={zapHeaderName} onChange={e => setZapHeaderName(e.target.value)} className={inputCls} placeholder="Authorization" />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Header Value</label>
+                    <input type="text" value={zapHeaderValue} onChange={e => setZapHeaderValue(e.target.value)} className={inputCls} placeholder="Bearer token123" />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Targets */}
         <div>
           <label className={labelCls}>Targets *</label>
@@ -114,6 +218,34 @@ export default function NewScanPage() {
           </button>
         </div>
 
+        {/* Schedule */}
+        <div className="border border-cyber-border rounded-lg p-4 space-y-3 bg-cyber-bg/50">
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-slate-400" />
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Schedule</p>
+          </div>
+          <div className="flex gap-4">
+            {([['now', 'Run now'], ['later', 'Schedule for later']] as const).map(([val, lbl]) => (
+              <label key={val} className="flex items-center gap-2 cursor-pointer">
+                <input type="radio" value={val} checked={scheduleMode === val} onChange={() => setScheduleMode(val)} className="accent-cyber-primary" />
+                <span className="text-sm text-slate-300">{lbl}</span>
+              </label>
+            ))}
+          </div>
+          {scheduleMode === 'later' && (
+            <div>
+              <label className={labelCls}>Scheduled Date & Time</label>
+              <input
+                type="datetime-local"
+                value={scheduledAt}
+                onChange={e => setScheduledAt(e.target.value)}
+                className={inputCls}
+                min={new Date().toISOString().slice(0, 16)}
+              />
+            </div>
+          )}
+        </div>
+
         {/* Submit */}
         <div className="flex gap-3 pt-2">
           <button type="button" onClick={() => navigate(-1)}
@@ -123,7 +255,7 @@ export default function NewScanPage() {
           <button type="submit" disabled={isSubmitting}
             className="flex-1 flex items-center justify-center gap-2 bg-cyber-primary text-cyber-bg font-semibold py-2.5 rounded-lg hover:bg-cyan-300 disabled:opacity-60 transition-colors text-sm">
             {isSubmitting && <LoadingSpinner size="sm" />}
-            {isSubmitting ? 'Starting…' : '🚀 Start Scan'}
+            {isSubmitting ? 'Starting…' : scheduleMode === 'later' ? '📅 Schedule Scan' : '🚀 Start Scan'}
           </button>
         </div>
       </form>

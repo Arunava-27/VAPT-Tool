@@ -114,6 +114,21 @@ async def login(
     user.last_login = datetime.now(timezone.utc)
     user.login_count = (user.login_count or 0) + 1
     db.commit()
+
+    # Write audit log entry
+    try:
+        from ....models.audit_log import AuditLog
+        db.add(AuditLog(
+            tenant_id=str(user.tenant_id),
+            user_id=str(user.id),
+            action="user_login",
+            resource_type="user",
+            resource_id=str(user.id),
+            details={"email": str(user.email)},
+        ))
+        db.commit()
+    except Exception:
+        pass
     
     # Create tokens
     token_data = {

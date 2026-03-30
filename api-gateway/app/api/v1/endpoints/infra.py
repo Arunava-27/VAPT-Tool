@@ -473,7 +473,10 @@ async def _detail_vault() -> Dict[str, Any]:
             "storage_backend": "file",
             "ui_url":         "http://localhost:8200/ui",
             "actions": [
-                {"id": "health_check", "label": "Check Status", "variant": "default", "confirm": False},
+                {"id": "health_check", "label": "Check Status",      "variant": "default", "confirm": False},
+                {"id": "unseal",       "label": "Unseal Vault",      "variant": "warning", "confirm": False, "params_required": True},
+                {"id": "init",         "label": "Initialize Vault",  "variant": "danger",  "confirm": True,
+                 "confirm_message": "This will initialize Vault. Only do this on a fresh install."},
             ],
         }
     except Exception as exc:
@@ -673,7 +676,46 @@ async def run_service_action(
                 sealed = data.get("sealed", True)
                 initialized = data.get("initialized", False)
                 state = "unsealed" if (initialized and not sealed) else ("sealed" if initialized else "uninitialized")
-                return {"ok": not sealed, "message": f"Vault is {state} · v{data.get('version', '?')}"}
+                return {"ok": not sealed, "message": f"Vault is {state} · v{data.get('version', '?')}", "data": data}
+
+        elif action == "unseal":
+            keys = (body.params or {}).get("keys", [])
+            if not keys:
+                raise HTTPException(status_code=400, detail="Provide at least one unseal key")
+            results = []
+            async with httpx.AsyncClient(timeout=10) as client:
+                for key in keys:
+                    res = await client.post(f"{vault_url}/v1/sys/unseal", json={"key": key})
+                    results.append(res.json())
+            last = results[-1] if results else {}
+            sealed = last.get("sealed", True)
+            progress = last.get("progress", 0)
+            threshold = last.get("t", 3)
+            return {
+                "ok": True,
+                "sealed": sealed,
+                "progress": progress,
+                "threshold": threshold,
+                "message": "Vault unsealed successfully!" if not sealed else f"Progress: {progress}/{threshold} keys accepted",
+            }
+
+        elif action == "init":
+            secret_shares = (body.params or {}).get("secret_shares", 5)
+            secret_threshold = (body.params or {}).get("secret_threshold", 3)
+            async with httpx.AsyncClient(timeout=15) as client:
+                res = await client.post(f"{vault_url}/v1/sys/init", json={
+                    "secret_shares": secret_shares,
+                    "secret_threshold": secret_threshold,
+                })
+            data = res.json()
+            if "errors" in data:
+                return {"ok": False, "message": str(data["errors"])}
+            return {
+                "ok": True,
+                "message": f"Vault initialized! Save these {secret_shares} unseal keys and the root token securely.",
+                "keys": data.get("keys", []),
+                "root_token": data.get("root_token", ""),
+            }
 
     # ── Workers ─────────────────────────────────────────────────────────────
     else:

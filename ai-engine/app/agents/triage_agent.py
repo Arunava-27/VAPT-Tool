@@ -80,7 +80,7 @@ Produce the prioritised triage JSON."""
             self.memory.set_state("triage_result", parsed)
 
             # Promote critical findings to shared memory
-            for vuln in parsed.get("triaged_vulnerabilities", []):
+            for vuln in parsed.get("triaged_vulnerabilities") or []:
                 if vuln.get("severity") in ("Critical", "High"):
                     self.scan_memory.add_finding({
                         "source": "triage",

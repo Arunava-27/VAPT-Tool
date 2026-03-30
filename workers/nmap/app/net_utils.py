@@ -1,33 +1,20 @@
 """
-net_utils.py — Pure-Python network interface helpers for the nmap worker.
+net_utils.py — Cross-platform network interface helpers for the nmap worker.
 
-Uses kernel interfaces (/proc/net/dev, ioctl SIOCGIFADDR/SIOCGIFNETMASK)
-instead of subprocess calls to `ip` or `ifconfig`, so it works even when
-iproute2 is not installed and never fails due to a missing binary.
+Supports both Linux (using /proc/net/dev + ioctl) and Windows (using ipconfig).
 """
 
+import platform
 import re
 import socket
 import struct
-from fcntl import ioctl
+import subprocess
 from typing import Optional
 
-# ioctl request codes (Linux/arm64 & x86_64 — same values)
-_SIOCGIFADDR    = 0x8915   # get interface IPv4 address
-_SIOCGIFNETMASK = 0x891B   # get interface netmask
+_IS_WINDOWS = platform.system() == "Windows"
 
 
-def _ioctl_addr(iface: str, request: int) -> Optional[str]:
-    """Return dotted-decimal IPv4 result of an ioctl request, or None."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        packed = struct.pack("256s", iface[:15].encode())
-        raw = ioctl(s.fileno(), request, packed)[20:24]
-        s.close()
-        return socket.inet_ntoa(raw)
-    except OSError:
-        return None
-
+# ─── Shared helpers ───────────────────────────────────────────────────────────
 
 def _prefix_from_mask(mask: str) -> int:
     """Convert dotted-decimal netmask to prefix length (e.g. '255.255.255.0' → 24)."""
@@ -47,11 +34,98 @@ def _is_docker_ip(ip: str) -> bool:
     return bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
 
 
-def _list_interfaces() -> list[str]:
+def _classify(ip: str) -> dict:
+    """Return is_docker and is_lan flags for an IP."""
+    is_docker = _is_docker_ip(ip)
+    is_lan = (
+        ip.startswith("192.168.") or
+        ip.startswith("10.") or
+        bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
+    ) and not is_docker
+    return {"is_docker": is_docker, "is_lan": is_lan}
+
+
+# ─── Windows implementation ───────────────────────────────────────────────────
+
+def _get_interfaces_windows() -> list[dict]:
+    """Parse `ipconfig /all` to enumerate IPv4 interfaces on Windows."""
+    results = []
+    try:
+        raw = subprocess.check_output(
+            "ipconfig /all", shell=True, text=True,
+            errors="replace", timeout=10
+        )
+        # Split into adapter blocks
+        blocks = re.split(r"\r?\n\r?\n", raw)
+        for block in blocks:
+            ip_match = re.search(
+                r"IPv4 Address[^:]*:\s*([\d.]+)", block, re.IGNORECASE
+            )
+            mask_match = re.search(
+                r"Subnet Mask[^:]*:\s*([\d.]+)", block, re.IGNORECASE
+            )
+            name_match = re.match(r"([^\r\n]+):", block)
+            if not ip_match or not mask_match:
+                continue
+            ip = ip_match.group(1).strip().rstrip("(Preferred)").strip()
+            mask = mask_match.group(1).strip()
+            if not re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
+                continue
+            prefix = _prefix_from_mask(mask)
+            network = _network_address(ip, prefix)
+            iface = name_match.group(1).strip() if name_match else "unknown"
+            flags = _classify(ip)
+            results.append({
+                "interface": iface,
+                "ip": ip,
+                "prefix": prefix,
+                "network_range": f"{network}/{prefix}",
+                "family": "ipv4",
+                **flags,
+            })
+    except Exception:
+        pass
+    return results
+
+
+def _read_gateway_windows() -> Optional[str]:
+    """Read the default gateway from `ipconfig` on Windows."""
+    try:
+        raw = subprocess.check_output(
+            "ipconfig", shell=True, text=True, errors="replace", timeout=10
+        )
+        match = re.search(
+            r"Default Gateway[^:]*:\s*([\d.]+)", raw, re.IGNORECASE
+        )
+        if match:
+            gw = match.group(1).strip()
+            if gw and gw != "0.0.0.0":
+                return gw
+    except Exception:
+        pass
+    return None
+
+
+# ─── Linux implementation ─────────────────────────────────────────────────────
+
+def _ioctl_addr(iface: str, request: int) -> Optional[str]:
+    """Return dotted-decimal IPv4 result of an ioctl request (Linux only)."""
+    try:
+        from fcntl import ioctl  # noqa: PLC0415
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        packed = struct.pack("256s", iface[:15].encode())
+        raw = ioctl(s.fileno(), request, packed)[20:24]
+        s.close()
+        return socket.inet_ntoa(raw)
+    except Exception:
+        return None
+
+
+def _list_interfaces_linux() -> list[str]:
     """Return interface names from /proc/net/dev (excludes loopback)."""
     try:
         with open("/proc/net/dev") as f:
-            lines = f.readlines()[2:]  # first two lines are headers
+            lines = f.readlines()[2:]
         return [
             line.split(":")[0].strip()
             for line in lines
@@ -61,22 +135,42 @@ def _list_interfaces() -> list[str]:
         return []
 
 
-def _read_gateway() -> Optional[str]:
-    """
-    Read the default gateway IP from /proc/net/route (pure kernel, no subprocess).
-    Returns the first default-route gateway as a dotted-decimal string, or None.
-    """
+def _get_interfaces_linux() -> list[dict]:
+    """Enumerate IPv4 interfaces on Linux using ioctl."""
+    _SIOCGIFADDR = 0x8915
+    _SIOCGIFNETMASK = 0x891B
+    results = []
+    for iface in _list_interfaces_linux():
+        if any(iface.startswith(p) for p in ("docker", "br-", "veth", "virbr")):
+            continue
+        ip = _ioctl_addr(iface, _SIOCGIFADDR)
+        mask = _ioctl_addr(iface, _SIOCGIFNETMASK)
+        if not ip or not mask or ip.startswith("0.") or ip == "0.0.0.0":
+            continue
+        prefix = _prefix_from_mask(mask)
+        network = _network_address(ip, prefix)
+        flags = _classify(ip)
+        results.append({
+            "interface": iface,
+            "ip": ip,
+            "prefix": prefix,
+            "network_range": f"{network}/{prefix}",
+            "family": "ipv4",
+            **flags,
+        })
+    return results
+
+
+def _read_gateway_linux() -> Optional[str]:
+    """Read default gateway from /proc/net/route (Linux only)."""
     try:
         with open("/proc/net/route") as f:
-            for line in f.readlines()[1:]:   # skip header
+            for line in f.readlines()[1:]:
                 parts = line.strip().split()
                 if len(parts) < 3:
                     continue
-                destination = parts[1]
-                gateway_hex = parts[2]
-                if destination == "00000000":  # 0.0.0.0 = default route
-                    # Gateway is stored in little-endian hex
-                    gw_bytes = bytes.fromhex(gateway_hex)[::-1]
+                if parts[1] == "00000000":  # default route
+                    gw_bytes = bytes.fromhex(parts[2])[::-1]
                     gw_ip = socket.inet_ntoa(gw_bytes)
                     if gw_ip != "0.0.0.0":
                         return gw_ip
@@ -91,82 +185,45 @@ def get_interfaces() -> list[dict]:
     """
     Return a list of dicts for every non-loopback IPv4 interface:
       {interface, ip, prefix, network_range, family, is_docker, is_lan}
-
-    Uses pure Python ioctl — no subprocess / no iproute2 required.
+    Works on both Windows and Linux.
     """
-    results = []
-    for iface in _list_interfaces():
-        # Skip virtual/Docker bridge interfaces
-        if any(iface.startswith(p) for p in ("docker", "br-", "veth", "virbr")):
-            continue
+    if _IS_WINDOWS:
+        return _get_interfaces_windows()
+    return _get_interfaces_linux()
 
-        ip = _ioctl_addr(iface, _SIOCGIFADDR)
-        mask = _ioctl_addr(iface, _SIOCGIFNETMASK)
-        if not ip or not mask or ip.startswith("0.") or ip == "0.0.0.0":
-            continue
 
-        prefix = _prefix_from_mask(mask)
-        network = _network_address(ip, prefix)
-        is_docker = _is_docker_ip(ip)
-        is_lan = (
-            ip.startswith("192.168.") or
-            ip.startswith("10.") or
-            bool(re.match(r"172\.(1[6-9]|2[0-9]|3[01])\.", ip))
-        ) and not is_docker
-
-        results.append({
-            "interface": iface,
-            "ip": ip,
-            "prefix": prefix,
-            "network_range": f"{network}/{prefix}",
-            "family": "ipv4",
-            "is_docker": is_docker,
-            "is_lan": is_lan,
-        })
-
-    return results
+def _read_gateway() -> Optional[str]:
+    """Read default gateway — cross-platform."""
+    if _IS_WINDOWS:
+        return _read_gateway_windows()
+    return _read_gateway_linux()
 
 
 def get_local_subnet() -> Optional[str]:
     """
     Return the CIDR subnet of the first active non-Docker LAN interface.
     Falls back to any non-loopback interface if no LAN interface is found.
-    Returns None only if no usable interface exists at all.
     """
     ifaces = get_interfaces()
-
-    # Prefer genuine LAN interfaces
     for iface in ifaces:
         if iface["is_lan"]:
             return iface["network_range"]
-
-    # Fall back to any non-Docker interface
     for iface in ifaces:
         if not iface["is_docker"]:
             return iface["network_range"]
-
-    # Last resort: Docker bridge (still better than nothing)
     if ifaces:
         return ifaces[0]["network_range"]
-
     return None
 
 
 def get_gateway_ips() -> set[str]:
-    """
-    Return the set of default gateway IPs.
-    Reads /proc/net/route (pure kernel) with fallback guesses.
-    """
+    """Return the set of default gateway IPs (cross-platform)."""
     gateways: set[str] = set()
-
     gw = _read_gateway()
     if gw:
         gateways.add(gw)
-
-    # Also guess common gateway addresses from discovered subnets
     for iface in get_interfaces():
         base = iface["network_range"].rsplit(".", 1)[0]
         gateways.add(f"{base}.1")
         gateways.add(f"{base}.254")
-
     return gateways

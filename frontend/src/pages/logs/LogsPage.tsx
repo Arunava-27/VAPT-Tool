@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RefreshCw, Search, X, ChevronDown } from 'lucide-react'
+import { RefreshCw, Search, X, ChevronDown, FileText, Shield } from 'lucide-react'
 import clsx from 'clsx'
 import {
   listContainers,
   getContainerLogs,
+  getAuditLogs,
   type ContainerInfo,
   type LogLine,
+  type AuditLogEntry,
 } from '../../api/logs'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -69,6 +71,9 @@ type LevelFilter = 'all' | Level
 // ── component ────────────────────────────────────────────────────────────────
 
 export default function LogsPage() {
+  const [activeTab, setActiveTab] = useState<'containers' | 'audit'>('containers')
+
+  // ── Container logs state ──────────────────────────────────────────────────
   const [containers, setContainers] = useState<ContainerInfo[]>([])
   const [containersLoading, setContainersLoading] = useState(true)
   const [containersError, setContainersError] = useState<string | null>(null)
@@ -88,7 +93,33 @@ export default function LogsPage() {
   const userScrolledUp = useRef(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // ── load containers ────────────────────────────────────────────────────────
+  // ── Audit log state ────────────────────────────────────────────────────────
+  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([])
+  const [auditTotal, setAuditTotal] = useState(0)
+  const [auditPage, setAuditPage] = useState(1)
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [auditError, setAuditError] = useState<string | null>(null)
+  const [auditSearch, setAuditSearch] = useState('')
+  const [auditSearchInput, setAuditSearchInput] = useState('')
+
+  const fetchAuditLogs = useCallback(async (page: number, action?: string) => {
+    setAuditLoading(true)
+    setAuditError(null)
+    try {
+      const r = await getAuditLogs(page, 50, action)
+      setAuditEntries(r.data.entries)
+      setAuditTotal(r.data.total)
+      setAuditPage(page)
+    } catch {
+      setAuditError('Failed to load audit logs')
+    } finally {
+      setAuditLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'audit') fetchAuditLogs(1)
+  }, [activeTab, fetchAuditLogs])
 
   useEffect(() => {
     setContainersLoading(true)
@@ -198,8 +229,152 @@ export default function LogsPage() {
 
   // ── render ─────────────────────────────────────────────────────────────────
 
+  const ACTION_COLORS: Record<string, string> = {
+    user_login: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
+    node_scan_started: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+    node_scan_completed: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+    network_discovery_started: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
+    network_discovery_completed: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+  }
+
+  function timeAgo(iso: string) {
+    const diff = Date.now() - new Date(iso).getTime()
+    if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
+    return new Date(iso).toLocaleDateString()
+  }
+
   return (
-    <div className="flex h-full bg-cyber-bg text-white overflow-hidden">
+    <div className="flex flex-col h-full bg-cyber-bg text-white overflow-hidden">
+      {/* ── Tab bar ── */}
+      <div className="flex-shrink-0 border-b border-cyber-border bg-cyber-surface px-4 flex items-center gap-1 pt-2">
+        <button
+          onClick={() => setActiveTab('containers')}
+          className={clsx(
+            'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t transition-colors border-b-2',
+            activeTab === 'containers'
+              ? 'text-cyber-primary border-cyber-primary'
+              : 'text-slate-400 border-transparent hover:text-white'
+          )}>
+          <FileText className="w-3.5 h-3.5" /> Container Logs
+        </button>
+        <button
+          onClick={() => setActiveTab('audit')}
+          className={clsx(
+            'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t transition-colors border-b-2',
+            activeTab === 'audit'
+              ? 'text-cyber-primary border-cyber-primary'
+              : 'text-slate-400 border-transparent hover:text-white'
+          )}>
+          <Shield className="w-3.5 h-3.5" /> Audit Logs
+        </button>
+      </div>
+
+      {activeTab === 'audit' ? (
+        /* ── Audit Logs panel ── */
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Controls */}
+          <div className="flex-shrink-0 border-b border-cyber-border bg-cyber-surface px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[200px] max-w-xs">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Filter by action…"
+                value={auditSearchInput}
+                onChange={e => setAuditSearchInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { setAuditSearch(auditSearchInput); fetchAuditLogs(1, auditSearchInput || undefined) }
+                }}
+                className="w-full bg-cyber-bg border border-cyber-border rounded text-xs text-slate-300 placeholder-slate-600 pl-7 pr-7 py-1.5 focus:outline-none focus:border-cyber-primary"
+              />
+              {auditSearchInput && (
+                <button onClick={() => { setAuditSearchInput(''); setAuditSearch(''); fetchAuditLogs(1) }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => fetchAuditLogs(1, auditSearch || undefined)}
+              disabled={auditLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded border border-cyber-border text-xs text-slate-400 hover:text-white hover:bg-cyber-border transition-colors disabled:opacity-50">
+              <RefreshCw className={clsx('w-3 h-3', auditLoading && 'animate-spin')} />
+              Refresh
+            </button>
+            <span className="text-xs text-slate-500 ml-auto">{auditTotal} entries</span>
+          </div>
+
+          {/* Table */}
+          <div className="flex-1 overflow-y-auto">
+            {auditLoading && auditEntries.length === 0 && (
+              <div className="flex items-center justify-center py-12">
+                <RefreshCw className="w-5 h-5 animate-spin text-cyber-primary" />
+              </div>
+            )}
+            {auditError && <p className="text-rose-400 text-sm text-center py-8">{auditError}</p>}
+            {!auditLoading && !auditError && auditEntries.length === 0 && (
+              <p className="text-slate-600 text-sm text-center py-12">No audit log entries yet. Actions like logins and scans will appear here.</p>
+            )}
+            {auditEntries.length > 0 && (
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-cyber-surface border-b border-cyber-border">
+                  <tr>
+                    <th className="text-left px-4 py-2.5 text-slate-500 font-medium w-32">Time</th>
+                    <th className="text-left px-4 py-2.5 text-slate-500 font-medium w-48">Action</th>
+                    <th className="text-left px-4 py-2.5 text-slate-500 font-medium">Resource</th>
+                    <th className="text-left px-4 py-2.5 text-slate-500 font-medium">Details</th>
+                    <th className="text-left px-4 py-2.5 text-slate-500 font-medium w-40">User</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-cyber-border/40">
+                  {auditEntries.map(entry => (
+                    <tr key={entry.id} className="hover:bg-cyber-border/20 transition-colors">
+                      <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap" title={entry.created_at}>
+                        {timeAgo(entry.created_at)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={clsx(
+                          'px-2 py-0.5 rounded border text-[11px] font-mono font-medium',
+                          ACTION_COLORS[entry.action] ?? 'bg-slate-700/40 text-slate-300 border-slate-600/30'
+                        )}>
+                          {entry.action}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-400">
+                        {entry.resource_type && (
+                          <span className="font-mono">{entry.resource_type}
+                            {entry.resource_id && <span className="text-slate-600"> #{entry.resource_id.slice(0, 8)}</span>}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-400 max-w-xs truncate">
+                        {Object.entries(entry.details ?? {})
+                          .filter(([k]) => k !== 'celery_task_id')
+                          .map(([k, v]) => `${k}: ${v}`)
+                          .join(' · ')}
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-400 truncate">{entry.user_email}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Pagination */}
+          {auditTotal > 50 && (
+            <div className="flex-shrink-0 border-t border-cyber-border bg-cyber-surface px-4 py-2 flex items-center gap-2 justify-end text-xs text-slate-400">
+              <button disabled={auditPage <= 1} onClick={() => fetchAuditLogs(auditPage - 1, auditSearch || undefined)}
+                className="px-2 py-1 rounded border border-cyber-border hover:bg-cyber-border disabled:opacity-40">Prev</button>
+              <span>Page {auditPage} of {Math.ceil(auditTotal / 50)}</span>
+              <button disabled={auditPage >= Math.ceil(auditTotal / 50)} onClick={() => fetchAuditLogs(auditPage + 1, auditSearch || undefined)}
+                className="px-2 py-1 rounded border border-cyber-border hover:bg-cyber-border disabled:opacity-40">Next</button>
+            </div>
+          )}
+        </div>
+      ) : (
+      <div className="flex flex-1 bg-cyber-bg text-white overflow-hidden">
       {/* ── Left panel: container list ── */}
       <aside className="w-64 flex-shrink-0 border-r border-cyber-border bg-cyber-surface flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b border-cyber-border">
@@ -412,6 +587,8 @@ export default function LogsPage() {
           </>
         )}
       </div>
+      </div>
+      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles, network, logs
+from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles, network, logs, reports, settings
 
 api_router = APIRouter()
 
@@ -79,4 +79,18 @@ api_router.include_router(
     logs.router,
     prefix="/logs",
     tags=["logs"]
+)
+
+# Reports
+api_router.include_router(
+    reports.router,
+    prefix="/reports",
+    tags=["reports"]
+)
+
+# Settings (cloud credentials, host-agent, platform)
+api_router.include_router(
+    settings.router,
+    prefix="/settings",
+    tags=["settings"]
 )

@@ -64,9 +64,11 @@ Produce the attack surface map JSON."""
         try:
             response = self._call_llm(prompt)
             parsed = self._parse_json_response(response.content)
+            if not isinstance(parsed, dict):
+                parsed = {"raw_response": str(parsed)}
 
             # Store key findings in shared scan memory
-            for asset in parsed.get("high_value_assets", []):
+            for asset in parsed.get("high_value_assets") or []:
                 self.scan_memory.add_finding({
                     "source": "recon",
                     "severity": parsed.get("risk_level", "medium"),

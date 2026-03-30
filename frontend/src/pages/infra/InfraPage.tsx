@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef } from 'react'
 import { RefreshCw, Database, Layers, Cpu, HardDrive, Server, Bot, Radio,
-  CheckCircle, XCircle, AlertTriangle, Clock, Network, Globe, Container, Cloud, Swords } from 'lucide-react'
+  CheckCircle, XCircle, AlertTriangle, Clock, Network, Globe, Container, Cloud, Swords,
+  Key, Lock, Trash2, X } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { getServicesHealth } from '../../api/infra'
+import { getServicesHealth, runServiceAction } from '../../api/infra'
 import type { ServiceHealth, ServicesHealthResponse } from '../../api/infra'
 import { usePolling } from '../../hooks/usePolling'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
@@ -38,6 +39,8 @@ const CATEGORY_LABEL: Record<string, string> = {
   worker: 'Worker',
 }
 
+const WORKER_IDS = ['worker-nmap', 'worker-zap', 'worker-trivy', 'worker-prowler', 'worker-metasploit']
+
 function StatusIcon({ status }: { status: string }) {
   if (status === 'healthy') return <CheckCircle className="w-4 h-4 text-emerald-400" />
   if (status === 'degraded') return <AlertTriangle className="w-4 h-4 text-amber-400" />
@@ -66,9 +69,207 @@ function LatencyBadge({ ms }: { ms?: number }) {
   return <span className={`text-xs font-mono ${color}`}>{ms} ms</span>
 }
 
-function ServiceCard({ svc, onClick }: { svc: ServiceHealth; onClick: () => void }) {
+// ─── Vault Unseal Modal ───────────────────────────────────────────────────────
+function VaultUnsealModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [key, setKey] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [progress, setProgress] = useState(0)
+
+  const handleSubmitKey = async () => {
+    if (!key.trim()) return
+    setSubmitting(true)
+    try {
+      const res = await runServiceAction('vault', 'unseal', { keys: [key.trim()] })
+      setKey('')
+      const newProgress = progress + 1
+      setProgress(newProgress)
+      if (res.data.message?.includes('unsealed') || newProgress >= 3) {
+        toast.success('Vault unsealed successfully!')
+        onSuccess()
+        onClose()
+      } else {
+        toast.success(`Key accepted (${newProgress}/3 minimum)`)
+      }
+    } catch {
+      toast.error('Failed to submit unseal key')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="bg-cyber-surface border border-cyber-border rounded-xl p-6 w-[480px] shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Lock className="w-5 h-5 text-amber-400" />
+            <h3 className="text-white font-semibold">Unseal HashiCorp Vault</h3>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+        </div>
+        <p className="text-sm text-slate-400 mb-4">
+          Enter unseal keys one at a time. You need at minimum 3 keys to unseal the Vault.
+        </p>
+        {progress > 0 && (
+          <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+            <p className="text-xs text-amber-400 font-semibold">{progress} key{progress !== 1 ? 's' : ''} accepted — {Math.max(0, 3 - progress)} more minimum required</p>
+            <div className="mt-2 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+              <div className="h-full bg-amber-400 rounded-full transition-all" style={{ width: `${Math.min(100, (progress / 3) * 100)}%` }} />
+            </div>
+          </div>
+        )}
+        <div className="space-y-1.5 mb-4">
+          <label className="text-xs text-slate-500">Unseal Key</label>
+          <input
+            type="password"
+            value={key}
+            onChange={e => setKey(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleSubmitKey()}
+            placeholder="Enter unseal key…"
+            className="w-full bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyber-primary transition-colors font-mono"
+          />
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-cyber-border text-slate-400 hover:text-white text-sm">Cancel</button>
+          <button onClick={handleSubmitKey} disabled={submitting || !key.trim()}
+            className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 hover:bg-amber-500/30 text-sm font-medium disabled:opacity-50">
+            {submitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Key className="w-3.5 h-3.5" />}
+            Submit Key
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Vault Init Modal ─────────────────────────────────────────────────────────
+function VaultInitModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+  const [shares, setShares] = useState('5')
+  const [threshold, setThreshold] = useState('3')
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState<{ unseal_keys: string[]; root_token: string } | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const handleInit = async () => {
+    setSubmitting(true)
+    try {
+      const res = await runServiceAction('vault', 'init', {
+        secret_shares: parseInt(shares),
+        secret_threshold: parseInt(threshold),
+      })
+      if (res.data.ok) {
+        setResult({ unseal_keys: ['Keys returned by Vault — check server logs'], root_token: res.data.message ?? '' })
+        toast.success('Vault initialized!')
+        onSuccess()
+      }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      toast.error(detail ?? 'Failed to initialize Vault')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const copyAll = () => {
+    if (!result) return
+    const text = `Unseal Keys:\n${result.unseal_keys.join('\n')}\n\nRoot Token:\n${result.root_token}`
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="bg-cyber-surface border border-cyber-border rounded-xl p-6 w-[520px] shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Key className="w-5 h-5 text-cyber-primary" />
+            <h3 className="text-white font-semibold">Initialize HashiCorp Vault</h3>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+        </div>
+
+        {!result ? (
+          <>
+            <p className="text-sm text-slate-400 mb-4">Configure the initial Vault secret sharing parameters.</p>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="text-xs text-slate-500 mb-1.5 block">Secret Shares</label>
+                <input type="number" min="1" max="20" value={shares} onChange={e => setShares(e.target.value)}
+                  className="w-full bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyber-primary transition-colors" />
+                <p className="text-xs text-slate-600 mt-1">Total number of key shares</p>
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1.5 block">Secret Threshold</label>
+                <input type="number" min="1" max="20" value={threshold} onChange={e => setThreshold(e.target.value)}
+                  className="w-full bg-cyber-bg border border-cyber-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyber-primary transition-colors" />
+                <p className="text-xs text-slate-600 mt-1">Keys required to unseal</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-cyber-border text-slate-400 hover:text-white text-sm">Cancel</button>
+              <button onClick={handleInit} disabled={submitting}
+                className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg bg-cyber-primary/20 border border-cyber-primary/40 text-cyber-primary hover:bg-cyber-primary/30 text-sm font-medium disabled:opacity-50">
+                {submitting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Key className="w-3.5 h-3.5" />}
+                Initialize Vault
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mb-4 p-4 bg-amber-500/10 border-2 border-amber-500/50 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+                <p className="text-sm font-bold text-amber-400">⚠️ SAVE THESE KEYS NOW — They will not be shown again!</p>
+              </div>
+              <div className="space-y-2 mt-3">
+                <p className="text-xs text-slate-400 font-semibold">Unseal Keys:</p>
+                {result.unseal_keys.map((k, i) => (
+                  <p key={i} className="text-xs font-mono text-slate-300 bg-cyber-bg p-2 rounded border border-cyber-border break-all">{k}</p>
+                ))}
+                <p className="text-xs text-slate-400 font-semibold mt-2">Root Token:</p>
+                <p className="text-xs font-mono text-cyber-primary bg-cyber-bg p-2 rounded border border-cyber-border break-all">{result.root_token}</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={copyAll}
+                className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg border border-cyber-primary/40 text-cyber-primary hover:bg-cyber-primary/10 text-sm">
+                {copied ? <CheckCircle className="w-3.5 h-3.5" /> : <Key className="w-3.5 h-3.5" />}
+                {copied ? 'Copied!' : 'Copy All Keys'}
+              </button>
+              <button onClick={onClose} className="flex-1 py-2 rounded-lg bg-cyber-primary/20 border border-cyber-primary/40 text-cyber-primary hover:bg-cyber-primary/30 text-sm font-medium">
+                Done
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge }: {
+  svc: ServiceHealth
+  onClick: () => void
+  onVaultUnseal?: () => void
+  onVaultInit?: () => void
+  onWorkerPurge?: () => void
+}) {
   const Icon = WORKER_ICON[svc.id] ?? CATEGORY_ICON[svc.category] ?? Server
   const isHealthy = svc.status === 'healthy'
+  const isVault = svc.id === 'vault'
+  const isWorker = WORKER_IDS.includes(svc.id)
+  const [purging, setPurging] = useState(false)
+
+  const handlePurge = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setPurging(true)
+    try {
+      if (onWorkerPurge) onWorkerPurge()
+    } finally {
+      setPurging(false)
+    }
+  }
 
   return (
     <div
@@ -145,6 +346,51 @@ function ServiceCard({ svc, onClick }: { svc: ServiceHealth; onClick: () => void
           </p>
         )}
       </div>
+
+      {/* Vault special actions */}
+      {isVault && svc.status === 'degraded' && onVaultUnseal && (
+        <div className="mt-3 pt-3 border-t border-amber-500/20">
+          <button
+            onClick={e => { e.stopPropagation(); onVaultUnseal() }}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 hover:bg-amber-500/30 text-xs font-medium transition-colors"
+          >
+            <Lock className="w-3.5 h-3.5" />
+            Unseal Vault
+          </button>
+        </div>
+      )}
+      {isVault && (svc.status === 'unhealthy' || svc.status === 'unreachable') && onVaultInit && (
+        <div className="mt-3 pt-3 border-t border-rose-500/20">
+          <button
+            onClick={e => { e.stopPropagation(); onVaultInit() }}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-cyber-primary/20 border border-cyber-primary/40 text-cyber-primary hover:bg-cyber-primary/30 text-xs font-medium transition-colors"
+          >
+            <Key className="w-3.5 h-3.5" />
+            Initialize Vault
+          </button>
+        </div>
+      )}
+
+      {/* Worker actions */}
+      {isWorker && (
+        <div className="mt-3 pt-3 border-t border-cyber-border space-y-2">
+          {(svc.status === 'unhealthy' || svc.status === 'unreachable') && (
+            <div className="p-2 bg-rose-500/5 border border-rose-500/20 rounded-lg">
+              <p className="text-xs text-rose-400">
+                Worker offline. Ensure the container is running: <span className="font-mono">docker compose up {svc.id}</span>
+              </p>
+            </div>
+          )}
+          <button
+            onClick={handlePurge}
+            disabled={purging}
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-50"
+          >
+            {purging ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+            Purge Queue
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -194,6 +440,8 @@ export default function InfraPage() {
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [selectedSvc, setSelectedSvc] = useState<ServiceHealth | null>(null)
+  const [vaultUnsealOpen, setVaultUnsealOpen] = useState(false)
+  const [vaultInitOpen, setVaultInitOpen] = useState(false)
 
   const hasData = useRef(false)
 
@@ -212,6 +460,15 @@ export default function InfraPage() {
   }, [])
 
   usePolling(fetchHealth, 15_000, autoRefresh)
+
+  const handleWorkerPurge = async (svcId: string) => {
+    try {
+      await runServiceAction(svcId, 'purge')
+      toast.success(`Queue purged for ${svcId}`)
+    } catch {
+      toast.error(`Failed to purge queue for ${svcId}`)
+    }
+  }
 
   const grouped = data
     ? ORDERED_CATEGORIES.reduce<Record<string, ServiceHealth[]>>((acc, cat) => {
@@ -276,13 +533,33 @@ export default function InfraPage() {
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {svcs.map((svc) => (
-              <ServiceCard key={svc.id} svc={svc} onClick={() => setSelectedSvc(svc)} />
+              <ServiceCard
+                key={svc.id}
+                svc={svc}
+                onClick={() => setSelectedSvc(svc)}
+                onVaultUnseal={svc.id === 'vault' ? () => setVaultUnsealOpen(true) : undefined}
+                onVaultInit={svc.id === 'vault' ? () => setVaultInitOpen(true) : undefined}
+                onWorkerPurge={WORKER_IDS.includes(svc.id) ? () => handleWorkerPurge(svc.id) : undefined}
+              />
             ))}
           </div>
         </section>
       ))}
 
       <ServiceDrawer svc={selectedSvc} onClose={() => setSelectedSvc(null)} />
+
+      {vaultUnsealOpen && (
+        <VaultUnsealModal
+          onClose={() => setVaultUnsealOpen(false)}
+          onSuccess={fetchHealth}
+        />
+      )}
+      {vaultInitOpen && (
+        <VaultInitModal
+          onClose={() => setVaultInitOpen(false)}
+          onSuccess={fetchHealth}
+        />
+      )}
     </div>
   )
 }

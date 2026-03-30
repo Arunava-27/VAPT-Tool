@@ -43,6 +43,7 @@ export interface CreateScanPayload {
   description?: string
   scan_type: string
   targets: ScanTarget[]
+  scan_config?: Record<string, unknown>
 }
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'informational'

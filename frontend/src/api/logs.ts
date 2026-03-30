@@ -21,6 +21,27 @@ export interface ContainerLogs {
   total: number
 }
 
+export interface AuditLogEntry {
+  id: number
+  action: string
+  resource_type: string | null
+  resource_id: string | null
+  details: Record<string, unknown>
+  user_email: string
+  created_at: string
+}
+
+export interface AuditLogsResponse {
+  total: number
+  page: number
+  per_page: number
+  entries: AuditLogEntry[]
+}
+
 export const listContainers = () => apiClient.get<ContainerInfo[]>('/api/v1/logs/containers')
 export const getContainerLogs = (id: string, tail = 300) =>
   apiClient.get<ContainerLogs>(`/api/v1/logs/containers/${id}`, { params: { tail } })
+export const getAuditLogs = (page = 1, perPage = 50, action?: string, resourceType?: string) =>
+  apiClient.get<AuditLogsResponse>('/api/v1/logs/audit', {
+    params: { page, per_page: perPage, ...(action ? { action } : {}), ...(resourceType ? { resource_type: resourceType } : {}) },
+  })

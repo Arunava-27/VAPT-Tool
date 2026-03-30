@@ -12,6 +12,7 @@ export interface NetworkNode {
   services: Array<{ port: number; protocol: string; service: string; product: string; version: string }>
   status: 'active' | 'inactive'
   network_range: string | null
+  risk_score: number
   first_discovered_at: string | null
   last_seen_at: string | null
 }
@@ -56,10 +57,48 @@ export interface NetworkStatus {
   primary_range: string | null
 }
 
+export interface HostAgentStatus {
+  available: boolean
+  platform: string | null
+  hostname: string | null
+}
+
+export interface HostVulnerability {
+  id: string
+  node_id: string
+  scan_id: string | null
+  vuln_id: string
+  title: string
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info'
+  description: string | null
+  cve_id: string | null
+  cvss_score: number | null
+  port: number | null
+  protocol: string | null
+  service: string | null
+  evidence: string | null
+  remediation: string | null
+  status: 'open' | 'accepted' | 'fixed' | 'false_positive'
+  discovered_at: string
+}
+
+export interface NetworkSummary {
+  total_nodes: number
+  active_nodes: number
+  total_vulns: number
+  critical: number
+  high: number
+  medium: number
+  low: number
+  info: number
+  risk_distribution: Array<{ ip: string; risk_score: number; critical: number; high: number; medium: number }>
+}
+
 export const getNetworkStatus = () => apiClient.get<NetworkStatus>('/api/v1/network/status')
 export const getHostInterfaces = () => apiClient.get<HostInterfacesResponse>('/api/v1/network/host-interfaces')
+export const getHostAgentStatus = () => apiClient.get<HostAgentStatus>('/api/v1/network/host-agent-status')
 export const discoverNetwork = (network_range?: string) =>
-  apiClient.post<{ scan_id: string; status: string; message: string }>('/api/v1/network/discover', { network_range })
+  apiClient.post<{ scan_id: string; status: string; source?: string; message: string; nodes_found?: number }>('/api/v1/network/discover', { network_range })
 export const getNodes = () => apiClient.get<NetworkNode[]>('/api/v1/network/nodes')
 export const getNode = (id: string) => apiClient.get<NetworkNode>(`/api/v1/network/nodes/${id}`)
 export const scanNode = (id: string, profile: string) =>
@@ -69,3 +108,11 @@ export const getScan = (id: string) => apiClient.get<NetworkScan>(`/api/v1/netwo
 export const listScans = () => apiClient.get<NetworkScan[]>('/api/v1/network/scans')
 export const cancelScan = (id: string) =>
   apiClient.post<{ ok: boolean; message: string }>(`/api/v1/network/scans/${id}/cancel`)
+export const getNodeVulnerabilities = (nodeId: string) =>
+  apiClient.get<HostVulnerability[]>(`/api/v1/network/nodes/${nodeId}/vulnerabilities`)
+export const getAllVulnerabilities = (params?: { severity?: string; status?: string }) =>
+  apiClient.get<HostVulnerability[]>('/api/v1/network/vulnerabilities', { params })
+export const getNetworkSummary = () =>
+  apiClient.get<NetworkSummary>('/api/v1/network/summary')
+export const updateVulnStatus = (nodeId: string, vulnId: string, status: string) =>
+  apiClient.post(`/api/v1/network/nodes/${nodeId}/vulnerabilities/${vulnId}/status`, { status })

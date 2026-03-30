@@ -56,9 +56,14 @@ class BaseTask:
         self._setup_signal_handlers()
     
     def _setup_signal_handlers(self):
-        """Setup handlers for graceful shutdown"""
-        signal.signal(signal.SIGTERM, self._handle_shutdown)
+        """Setup handlers for graceful shutdown (cross-platform)."""
         signal.signal(signal.SIGINT, self._handle_shutdown)
+        # SIGTERM is not available on Windows; skip gracefully
+        if hasattr(signal, "SIGTERM"):
+            try:
+                signal.signal(signal.SIGTERM, self._handle_shutdown)
+            except (OSError, ValueError):
+                pass
     
     def _handle_shutdown(self, signum, frame):
         """Handle shutdown signals gracefully"""

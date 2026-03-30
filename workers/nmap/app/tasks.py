@@ -2,6 +2,7 @@ import logging
 import time
 import sys
 import os
+import re
 
 # Add parent directories to path to import base classes
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'base'))
@@ -419,6 +420,122 @@ def node_scan(self, task_data):
                 os_family, os_version,
                 scan_id, node_id,
             ))
+
+        # ── Parse vuln scripts and build host_vulnerabilities entries ──────────
+        vulnerabilities = []
+        if xml_out and node_id:
+            vroot = ET.fromstring(xml_out)
+            for host_el in vroot.findall("host"):
+                ports_el = host_el.find("ports")
+                if not ports_el:
+                    continue
+                for port_el in ports_el.findall("port"):
+                    state_el = port_el.find("state")
+                    if state_el is None or state_el.get("state") != "open":
+                        continue
+                    portid = int(port_el.get("portid", 0))
+                    proto = port_el.get("protocol", "tcp")
+                    svc_el = port_el.find("service")
+                    svc_name = svc_el.get("name", "") if svc_el is not None else ""
+                    svc_product = svc_el.get("product", "") if svc_el is not None else ""
+                    svc_version = svc_el.get("version", "") if svc_el is not None else ""
+
+                    # Info-level finding for every open port/service
+                    svc_desc = " ".join(filter(None, [svc_product, svc_version]))
+                    vulnerabilities.append({
+                        "vuln_id": f"service-{portid}-{proto}",
+                        "title": f"Open Port: {svc_name or 'unknown'} on {portid}/{proto}",
+                        "severity": "info",
+                        "description": f"Port {portid}/{proto} is open{(': ' + svc_desc) if svc_desc else ''}",
+                        "cve_id": None,
+                        "cvss_score": None,
+                        "port": portid,
+                        "protocol": proto,
+                        "service": svc_name,
+                        "evidence": svc_desc or None,
+                        "remediation": None,
+                    })
+
+                    # Parse nmap script output for CVEs and vulnerabilities
+                    for script_el in port_el.findall("script"):
+                        script_id = script_el.get("id", "")
+                        script_output = script_el.get("output", "")
+                        cve_ids = list(set(re.findall(r'CVE-\d{4}-\d+', script_output)))
+
+                        if cve_ids:
+                            for cve_id in cve_ids:
+                                # Extract CVSS score if present in output
+                                cvss_match = re.search(r'\b(\d+\.\d)\b', script_output)
+                                cvss_score = float(cvss_match.group(1)) if cvss_match else None
+                                if cvss_score is not None:
+                                    if cvss_score >= 9.0:
+                                        severity = "critical"
+                                    elif cvss_score >= 7.0:
+                                        severity = "high"
+                                    elif cvss_score >= 4.0:
+                                        severity = "medium"
+                                    else:
+                                        severity = "low"
+                                else:
+                                    severity = "high"
+                                vulnerabilities.append({
+                                    "vuln_id": f"{script_id}-{cve_id}-{portid}",
+                                    "title": f"{cve_id} – {svc_name or 'unknown'} ({portid}/{proto})",
+                                    "severity": severity,
+                                    "description": f"Vulnerability detected by nmap script '{script_id}'",
+                                    "cve_id": cve_id,
+                                    "cvss_score": cvss_score,
+                                    "port": portid,
+                                    "protocol": proto,
+                                    "service": svc_name,
+                                    "evidence": script_output[:500] if script_output else None,
+                                    "remediation": None,
+                                })
+                        elif script_output and any(kw in script_output for kw in ["VULNERABLE", "vulnerable", "exploit"]):
+                            vulnerabilities.append({
+                                "vuln_id": f"{script_id}-{portid}",
+                                "title": f"Potential vulnerability: {script_id} on {portid}/{proto}",
+                                "severity": "medium",
+                                "description": f"nmap script '{script_id}' flagged a potential vulnerability",
+                                "cve_id": None,
+                                "cvss_score": None,
+                                "port": portid,
+                                "protocol": proto,
+                                "service": svc_name,
+                                "evidence": script_output[:500] if script_output else None,
+                                "remediation": None,
+                            })
+
+        # ── Persist vulnerabilities and compute risk score ─────────────────────
+        if vulnerabilities and node_id:
+            # Replace all vulns for this node with fresh scan results
+            cur.execute("DELETE FROM host_vulnerabilities WHERE node_id=%s", (node_id,))
+            for vuln in vulnerabilities:
+                cur.execute("""
+                    INSERT INTO host_vulnerabilities
+                        (node_id, scan_id, vuln_id, title, severity, description,
+                         cve_id, cvss_score, port, protocol, service, evidence, remediation)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    node_id, scan_id,
+                    vuln["vuln_id"], vuln["title"], vuln["severity"], vuln.get("description"),
+                    vuln.get("cve_id"), vuln.get("cvss_score"),
+                    vuln.get("port"), vuln.get("protocol"), vuln.get("service"),
+                    vuln.get("evidence"), vuln.get("remediation"),
+                ))
+
+            # Compute risk_score = critical×40 + high×15 + medium×5 + low×1
+            sev_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+            for v in vulnerabilities:
+                s = v["severity"]
+                if s in sev_counts:
+                    sev_counts[s] += 1
+            risk_score = min(100,
+                sev_counts["critical"] * 40 + sev_counts["high"] * 15 +
+                sev_counts["medium"] * 5 + sev_counts["low"] * 1
+            )
+            if node_id:
+                cur.execute("UPDATE network_nodes SET risk_score=%s WHERE id=%s", (risk_score, node_id))
 
         if scan_id:
             cur.execute("""

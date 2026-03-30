@@ -9,9 +9,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from .auth import get_current_active_user
 from ....models.user import User
+from ....models.audit_log import AuditLog
+from ....db.session import get_db
 
 router = APIRouter()
 
@@ -137,4 +140,57 @@ async def get_logs(
         "container_id": container_id,
         "lines": lines,
         "total": len(lines),
+    }
+
+
+@router.get("/audit")
+async def list_audit_logs(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=1, le=200),
+    action: Optional[str] = Query(default=None),
+    resource_type: Optional[str] = Query(default=None),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """Return paginated audit log entries for the current tenant."""
+    q = db.query(AuditLog).filter(AuditLog.tenant_id == str(current_user.tenant_id))
+    if action:
+        q = q.filter(AuditLog.action.ilike(f"%{action}%"))
+    if resource_type:
+        q = q.filter(AuditLog.resource_type == resource_type)
+
+    total = q.count()
+    entries = (
+        q.order_by(AuditLog.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    # Resolve user emails for display
+    user_ids = {e.user_id for e in entries if e.user_id}
+    users_map: Dict[str, str] = {}
+    if user_ids:
+        from ....models.user import User as UserModel
+        rows = db.query(UserModel.id, UserModel.email).filter(
+            UserModel.id.in_(list(user_ids))
+        ).all()
+        users_map = {str(r.id): r.email for r in rows}
+
+    return {
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "entries": [
+            {
+                "id": e.id,
+                "action": e.action,
+                "resource_type": e.resource_type,
+                "resource_id": e.resource_id,
+                "details": e.details or {},
+                "user_email": users_map.get(str(e.user_id), "system"),
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in entries
+        ],
     }
