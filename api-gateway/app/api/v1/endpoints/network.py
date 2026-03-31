@@ -11,7 +11,11 @@ import httpx
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
-HOST_AGENT_URL = "http://host.docker.internal:9999"
+import sys as _sys
+HOST_AGENT_URL = (
+    "http://localhost:9999" if _sys.platform == "win32"
+    else "http://host.docker.internal:9999"
+)
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session

@@ -376,8 +376,8 @@ export default function NetworkPage() {
     const map: Record<string, { critical: number; high: number; medium: number; low: number; info: number }> = {}
     for (const v of allVulns) {
       if (!map[v.node_id]) map[v.node_id] = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
-      const s = v.severity as keyof typeof map[string]
-      if (s in map[v.node_id]) (map[v.node_id][s] as number)++
+      const s = v.severity as 'critical' | 'high' | 'medium' | 'low' | 'info'
+      if (s in map[v.node_id]) map[v.node_id][s] = (map[v.node_id][s] as number) + 1
     }
     return map
   }, [allVulns])
@@ -390,7 +390,7 @@ export default function NetworkPage() {
       r = r.filter(n => n.ip_address.includes(q) || n.hostname?.toLowerCase().includes(q) || n.mac_address?.toLowerCase().includes(q))
     }
     if (severityFilter !== 'all') {
-      r = r.filter(n => (vulnsByNode[n.id]?.[severityFilter as keyof typeof vulnsByNode[string]] ?? 0) > 0)
+      r = r.filter(n => (vulnsByNode[n.id]?.[severityFilter as 'critical' | 'high' | 'medium' | 'low' | 'info'] ?? 0) > 0)
     }
     r.sort((a, b) => {
       // Always pin "this device" nodes to the top

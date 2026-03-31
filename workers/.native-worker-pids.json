@@ -1,5 +1,5 @@
 {
-    "trivy":  21464,
-    "nmap":  19548,
-    "prowler":  13316
+    "trivy":  12944,
+    "nmap":  13744,
+    "prowler":  11804
 }

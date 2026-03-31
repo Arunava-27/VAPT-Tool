@@ -1,10 +1,12 @@
 import { useState, useCallback, useRef } from 'react'
 import { RefreshCw, Database, Layers, Cpu, HardDrive, Server, Bot, Radio,
   CheckCircle, XCircle, AlertTriangle, Clock, Network, Globe, Container, Cloud, Swords,
-  Key, Lock, Trash2, X } from 'lucide-react'
+  Key, Lock, Trash2, X, Monitor, Activity, MemoryStick, Hash, ExternalLink,
+  Power, PowerOff, Terminal, Copy, Check } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { getServicesHealth, runServiceAction } from '../../api/infra'
-import type { ServiceHealth, ServicesHealthResponse } from '../../api/infra'
+import { useNavigate } from 'react-router-dom'
+import { getServicesHealth, runServiceAction, getHostAgentStatus, shutdownHostAgent } from '../../api/infra'
+import type { ServiceHealth, ServicesHealthResponse, HostAgentStatus } from '../../api/infra'
 import { usePolling } from '../../hooks/usePolling'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 import ServiceDrawer from '../../components/infra/ServiceDrawer'
@@ -42,7 +44,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 const WORKER_IDS = ['worker-nmap', 'worker-zap', 'worker-trivy', 'worker-prowler', 'worker-metasploit']
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === 'healthy') return <CheckCircle className="w-4 h-4 text-emerald-400" />
+  if (status === 'healthy' || status === 'running') return <CheckCircle className="w-4 h-4 text-emerald-400" />
   if (status === 'degraded') return <AlertTriangle className="w-4 h-4 text-amber-400" />
   return <XCircle className="w-4 h-4 text-rose-400" />
 }
@@ -50,15 +52,19 @@ function StatusIcon({ status }: { status: string }) {
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     healthy:     'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+    running:     'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
     degraded:    'bg-amber-500/10  text-amber-400  border-amber-500/30',
     unhealthy:   'bg-rose-500/10   text-rose-400   border-rose-500/30',
     unreachable: 'bg-slate-500/10  text-slate-400  border-slate-500/30',
+    stopped:     'bg-rose-500/10   text-rose-400   border-rose-500/30',
+    not_started: 'bg-slate-500/10  text-slate-400  border-slate-500/30',
   }
   const cls = map[status] ?? map.unhealthy
+  const label = status === 'not_started' ? 'Not Started' : status.charAt(0).toUpperCase() + status.slice(1)
   return (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium ${cls}`}>
       <StatusIcon status={status} />
-      {status.charAt(0).toUpperCase() + status.slice(1)}
+      {label}
     </span>
   )
 }
@@ -248,17 +254,199 @@ function VaultInitModal({ onClose, onSuccess }: { onClose: () => void; onSuccess
   )
 }
 
-function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge }: {
+// ─── Host Agent Control Card ──────────────────────────────────────────────────
+
+const START_CMD = 'cd host-agent && start.bat'
+
+function HostAgentCard({ status, onRefresh }: { status: HostAgentStatus | null; onRefresh: () => void }) {
+  const [stopping, setStopping] = useState(false)
+  const [showStartModal, setShowStartModal] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const isOnline = status?.status === 'online'
+  const isLoading = status === null
+
+  const handleStop = async () => {
+    if (!confirm('Stop the host discovery agent? Worker monitoring and network interface detection will stop working until it is restarted.')) return
+    setStopping(true)
+    try {
+      await shutdownHostAgent()
+      toast.success('Host agent stopped')
+      setTimeout(onRefresh, 800)
+    } catch {
+      toast.error('Failed to stop host agent')
+    } finally {
+      setStopping(false)
+    }
+  }
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(START_CMD)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const formatUptime = (s?: number) => {
+    if (!s) return '—'
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60
+    return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`
+  }
+
+  return (
+    <>
+      <div className={`border rounded-xl p-4 transition-all ${
+        isOnline
+          ? 'border-cyber-primary/40 bg-cyber-primary/5'
+          : 'border-rose-500/30 bg-rose-500/5'
+      }`}>
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2 mb-3">
+          <div className="flex items-center gap-2.5">
+            <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+              isOnline ? 'bg-cyber-primary/15 border border-cyber-primary/30' : 'bg-rose-500/10 border border-rose-500/20'
+            }`}>
+              <Terminal className={`w-4 h-4 ${isOnline ? 'text-cyber-primary' : 'text-rose-400'}`} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-white">Host Discovery Agent</p>
+              <p className="text-xs text-slate-500">Bridge between Docker and host machine</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {isLoading ? (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium bg-slate-500/10 text-slate-400 border-slate-500/30">
+                <RefreshCw className="w-3 h-3 animate-spin" /> Checking…
+              </span>
+            ) : isOnline ? (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                <CheckCircle className="w-3.5 h-3.5" /> Online
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border text-xs font-medium bg-rose-500/10 text-rose-400 border-rose-500/30">
+                <XCircle className="w-3.5 h-3.5" /> Offline
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Metrics */}
+        {isOnline && status && (
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs border-t border-cyber-border pt-3 mb-3">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500 flex items-center gap-1"><Hash className="w-3 h-3" />PID</span>
+              <span className="text-slate-300 font-mono">{status.pid}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500 flex items-center gap-1"><Clock className="w-3 h-3" />Uptime</span>
+              <span className="text-emerald-400 font-mono">{formatUptime(status.uptime_s)}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500 flex items-center gap-1"><Activity className="w-3 h-3" />CPU</span>
+              <span className="text-slate-300 font-mono">{status.cpu_percent?.toFixed(1) ?? '0.0'}%</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500 flex items-center gap-1"><MemoryStick className="w-3 h-3" />RAM</span>
+              <span className="text-slate-300 font-mono">{status.memory_mb ?? '—'} MB</span>
+            </div>
+          </div>
+        )}
+
+        {!isOnline && !isLoading && (
+          <div className="border-t border-rose-500/20 pt-3 mb-3">
+            <p className="text-xs text-rose-400/80">
+              Worker monitoring, network interface detection, and log streaming are unavailable while the agent is offline.
+            </p>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2">
+          {isOnline ? (
+            <button
+              onClick={handleStop}
+              disabled={stopping}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-rose-500/40 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {stopping ? <RefreshCw className="w-3 h-3 animate-spin" /> : <PowerOff className="w-3 h-3" />}
+              Stop Agent
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowStartModal(true)}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 text-xs font-medium transition-colors"
+            >
+              <Power className="w-3 h-3" />
+              How to Start
+            </button>
+          )}
+          <button
+            onClick={onRefresh}
+            className="p-1.5 rounded-lg border border-cyber-border text-slate-400 hover:text-white hover:bg-cyber-border transition-colors"
+            title="Refresh status"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Start instructions modal */}
+      {showStartModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-cyber-surface border border-cyber-border rounded-xl p-6 w-[480px] shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Power className="w-5 h-5 text-emerald-400" />
+                <h3 className="text-white font-semibold">Start Host Discovery Agent</h3>
+              </div>
+              <button onClick={() => setShowStartModal(false)} className="text-slate-400 hover:text-white">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-400 mb-4">
+              The host agent must be started manually on the host machine. Open a terminal in the project root and run:
+            </p>
+
+            <div className="flex items-center gap-2 bg-[#070c1a] border border-cyber-border rounded-lg px-4 py-3 mb-4">
+              <code className="text-emerald-400 font-mono text-sm flex-1">{START_CMD}</code>
+              <button onClick={handleCopy} className="text-slate-500 hover:text-white transition-colors flex-shrink-0">
+                {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+
+            <div className="bg-cyber-primary/5 border border-cyber-primary/20 rounded-lg p-3 mb-4">
+              <p className="text-xs text-slate-400 leading-relaxed">
+                <span className="text-cyber-primary font-medium">Why manual?</span> The agent runs natively on your host machine to access real LAN interfaces, process files, and worker logs — things Docker containers cannot do. It cannot be started remotely from Docker.
+              </p>
+            </div>
+
+            <button
+              onClick={() => setShowStartModal(false)}
+              className="w-full py-2 rounded-lg border border-cyber-border text-slate-400 hover:text-white text-sm transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+
+function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge, onViewLogs }: {
   svc: ServiceHealth
   onClick: () => void
   onVaultUnseal?: () => void
   onVaultInit?: () => void
   onWorkerPurge?: () => void
+  onViewLogs?: () => void
 }) {
   const Icon = WORKER_ICON[svc.id] ?? CATEGORY_ICON[svc.category] ?? Server
-  const isHealthy = svc.status === 'healthy'
+  const isHealthy = svc.status === 'healthy' || svc.status === 'running'
   const isVault = svc.id === 'vault'
   const isWorker = WORKER_IDS.includes(svc.id)
+  const isNative = svc.host === 'host_machine'
   const [purging, setPurging] = useState(false)
 
   const handlePurge = async (e: React.MouseEvent) => {
@@ -288,7 +476,15 @@ function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge }
             <Icon className={`w-4 h-4 ${isHealthy ? 'text-cyber-primary' : 'text-rose-400'}`} />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-white truncate">{svc.name}</p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className="text-sm font-semibold text-white truncate">{svc.label ?? svc.name}</p>
+              {isNative && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyber-primary/15 border border-cyber-primary/30 text-cyber-primary text-[10px] font-medium">
+                  <Monitor className="w-2.5 h-2.5" />
+                  Host
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-500">{svc.description ?? (CATEGORY_LABEL[svc.category] ?? svc.category)}</p>
           </div>
         </div>
@@ -318,6 +514,31 @@ function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge }
           <div className="flex justify-between items-center">
             <span className="text-slate-500">Concurrency</span>
             <span className="text-slate-300">{svc.concurrency}</span>
+          </div>
+        )}
+        {/* Native worker metrics */}
+        {isNative && svc.pid && (
+          <div className="flex justify-between items-center">
+            <span className="text-slate-500 flex items-center gap-1"><Hash className="w-3 h-3" />PID</span>
+            <span className="text-slate-300 font-mono">{svc.pid}</span>
+          </div>
+        )}
+        {isNative && svc.uptime && (
+          <div className="flex justify-between items-center">
+            <span className="text-slate-500 flex items-center gap-1"><Clock className="w-3 h-3" />Uptime</span>
+            <span className="text-emerald-400 font-mono">{svc.uptime}</span>
+          </div>
+        )}
+        {isNative && svc.cpu_percent !== undefined && (
+          <div className="flex justify-between items-center">
+            <span className="text-slate-500 flex items-center gap-1"><Activity className="w-3 h-3" />CPU</span>
+            <span className="text-slate-300 font-mono">{svc.cpu_percent.toFixed(1)}%</span>
+          </div>
+        )}
+        {isNative && svc.memory_mb !== undefined && (
+          <div className="flex justify-between items-center">
+            <span className="text-slate-500 flex items-center gap-1"><MemoryStick className="w-3 h-3" />RAM</span>
+            <span className="text-slate-300 font-mono">{svc.memory_mb} MB</span>
           </div>
         )}
         {svc.active_model && (
@@ -374,21 +595,34 @@ function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge }
       {/* Worker actions */}
       {isWorker && (
         <div className="mt-3 pt-3 border-t border-cyber-border space-y-2">
-          {(svc.status === 'unhealthy' || svc.status === 'unreachable') && (
+          {(svc.status === 'unhealthy' || svc.status === 'unreachable' || svc.status === 'stopped' || svc.status === 'not_started') && (
             <div className="p-2 bg-rose-500/5 border border-rose-500/20 rounded-lg">
               <p className="text-xs text-rose-400">
-                Worker offline. Ensure the container is running: <span className="font-mono">docker compose up {svc.id}</span>
+                {isNative
+                  ? 'Worker offline. Run: cd workers && .\\start-native.ps1'
+                  : 'Worker offline. Ensure the container is running: docker compose up ' + svc.id}
               </p>
             </div>
           )}
-          <button
-            onClick={handlePurge}
-            disabled={purging}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-50"
-          >
-            {purging ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-            Purge Queue
-          </button>
+          <div className="flex gap-2">
+            {onViewLogs && (
+              <button
+                onClick={e => { e.stopPropagation(); onViewLogs() }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-cyber-primary/30 text-cyber-primary hover:bg-cyber-primary/10 text-xs font-medium transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                View Logs
+              </button>
+            )}
+            <button
+              onClick={handlePurge}
+              disabled={purging}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {purging ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+              Purge Queue
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -435,6 +669,7 @@ function OverallBanner({ data }: { data: ServicesHealthResponse }) {
 const ORDERED_CATEGORIES = ['database', 'cache', 'queue', 'search', 'storage', 'backend', 'worker'] as const
 
 export default function InfraPage() {
+  const navigate = useNavigate()
   const [data, setData] = useState<ServicesHealthResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
@@ -442,13 +677,26 @@ export default function InfraPage() {
   const [selectedSvc, setSelectedSvc] = useState<ServiceHealth | null>(null)
   const [vaultUnsealOpen, setVaultUnsealOpen] = useState(false)
   const [vaultInitOpen, setVaultInitOpen] = useState(false)
+  const [hostAgentStatus, setHostAgentStatus] = useState<HostAgentStatus | null>(null)
 
   const hasData = useRef(false)
 
+  const fetchHostAgent = useCallback(async () => {
+    try {
+      const res = await getHostAgentStatus()
+      setHostAgentStatus(res.data)
+    } catch {
+      setHostAgentStatus({ status: 'offline' })
+    }
+  }, [])
+
   const fetchHealth = useCallback(async () => {
     try {
-      const res = await getServicesHealth()
-      setData(res.data)
+      const [svcRes] = await Promise.all([
+        getServicesHealth(),
+        fetchHostAgent(),
+      ])
+      setData(svcRes.data)
       hasData.current = true
       setLastChecked(new Date())
     } catch (err) {
@@ -457,7 +705,7 @@ export default function InfraPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [fetchHostAgent])
 
   usePolling(fetchHealth, 15_000, autoRefresh)
 
@@ -521,6 +769,17 @@ export default function InfraPage() {
       {/* Overall banner */}
       {data && <OverallBanner data={data} />}
 
+      {/* Host Agent control */}
+      <section>
+        <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+          <Terminal className="w-3.5 h-3.5" />
+          Host Services
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          <HostAgentCard status={hostAgentStatus} onRefresh={fetchHostAgent} />
+        </div>
+      </section>
+
       {/* Service groups */}
       {Object.entries(grouped).map(([cat, svcs]) => (
         <section key={cat}>
@@ -540,6 +799,9 @@ export default function InfraPage() {
                 onVaultUnseal={svc.id === 'vault' ? () => setVaultUnsealOpen(true) : undefined}
                 onVaultInit={svc.id === 'vault' ? () => setVaultInitOpen(true) : undefined}
                 onWorkerPurge={WORKER_IDS.includes(svc.id) ? () => handleWorkerPurge(svc.id) : undefined}
+                onViewLogs={WORKER_IDS.includes(svc.id) && svc.host === 'host_machine'
+                  ? () => navigate(`/logs?worker=${svc.id.replace('worker-', '')}`)
+                  : undefined}
               />
             ))}
           </div>

@@ -319,7 +319,9 @@ async def get_host_agent(
 ):
     """Get host agent configuration and live health status."""
     stored_url = _get_stored_agent_url(db)
-    agent_url = stored_url or "http://host.docker.internal:9999"
+    import sys as _sys
+    _default_agent = "http://localhost:9999" if _sys.platform == "win32" else "http://host.docker.internal:9999"
+    agent_url = stored_url or _default_agent
 
     health_status = "unknown"
     health_detail: Dict[str, Any] = {}

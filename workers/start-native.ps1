@@ -50,6 +50,20 @@ foreach ($w in $dockerWorkers) {
     }
 }
 
+# Kill any existing native worker processes to prevent duplicates
+Write-Header "Stopping existing native workers"
+$workerQueues = @("nmap", "trivy", "prowler", "zap", "metasploit")
+foreach ($q in $workerQueues) {
+    $procs = Get-CimInstance Win32_Process | Where-Object {
+        $_.CommandLine -like "*celery*" -and $_.CommandLine -like "*-Q $q*"
+    }
+    foreach ($p in $procs) {
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        Write-Step "Killed existing $q worker PID=$($p.ProcessId)"
+    }
+    if (-not $procs) { Write-Step "No existing $q worker running" }
+}
+
 # Check infra connectivity
 Write-Header "Checking Docker infra on localhost"
 $checks = @(

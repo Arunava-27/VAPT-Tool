@@ -124,39 +124,95 @@ async def probe_ai_engine() -> Dict[str, Any]:
         return {"status": "unhealthy", "error": str(exc)}
 
 
+import sys as _sys
+_HOST_AGENT_URL = (
+    "http://localhost:9999" if _sys.platform == "win32"
+    else "http://host.docker.internal:9999"
+)
+
+
+async def _fetch_host_agent_workers() -> Dict[str, Any]:
+    """Fetch native worker details from the host agent (PID, uptime, resource stats)."""
+    try:
+        async with httpx.AsyncClient(timeout=4) as client:
+            res = await client.get(f"{_HOST_AGENT_URL}/workers/status")
+            if res.status_code == 200:
+                return {w["name"]: w for w in res.json()}
+    except Exception:
+        pass
+    return {}
+
+
 async def probe_celery_workers() -> List[Dict[str, Any]]:
-    """Check worker health via RabbitMQ Management API queue consumer counts."""
+    """Check worker health via RabbitMQ Management API, enriched with host-agent native details."""
     known_queues = ["nmap", "zap", "trivy", "prowler", "metasploit"]
     results = []
 
+    # Fetch RabbitMQ queue info and host-agent native details in parallel
     try:
         user, password, host = _rmq_creds()
         mgmt_url = f"http://{host}:15672/api/queues/%2F"
-        async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.get(mgmt_url, auth=(user, password))
-            queues = {q["name"]: q for q in res.json()} if res.status_code == 200 else {}
-
-        for name in known_queues:
-            q = queues.get(name)
-            if q is None:
-                results.append({
-                    "name": f"worker-{name}",
-                    "status": "unreachable",
-                    "error": "Queue not found in RabbitMQ",
-                })
-            else:
-                consumers = q.get("consumers", 0)
-                messages = q.get("messages", 0)
-                results.append({
-                    "name": f"worker-{name}",
-                    "status": "healthy" if consumers > 0 else "unhealthy",
-                    "concurrency": consumers,
-                    "tasks_processed": {"queued": messages},
-                    **({"error": "No consumers — worker may be down"} if consumers == 0 else {}),
-                })
+        rmq_task = httpx.AsyncClient(timeout=5).get(mgmt_url, auth=(user, password))
+        rmq_res, native_info = await asyncio.gather(rmq_task, _fetch_host_agent_workers(), return_exceptions=True)
+        if isinstance(rmq_res, Exception):
+            queues = {}
+        else:
+            queues = {q["name"]: q for q in rmq_res.json()} if rmq_res.status_code == 200 else {}
+        if isinstance(native_info, Exception):
+            native_info = {}
     except Exception as exc:
-        for name in known_queues:
-            results.append({"name": f"worker-{name}", "status": "unreachable", "error": str(exc)})
+        queues = {}
+        native_info = {}
+
+    import time as _time
+    for name in known_queues:
+        q = queues.get(name)
+        native = native_info.get(name, {})
+        is_native = bool(native)
+        pid = native.get("pid")
+        alive = native.get("alive", False)
+        stats = native.get("stats", {})
+        create_time = stats.get("create_time")
+        uptime_s = round(_time.time() - create_time) if create_time else None
+
+        if q is None:
+            worker_status = "running" if alive else "unreachable"
+            consumers = 1 if alive else 0
+            messages = 0
+        else:
+            consumers = q.get("consumers", 0)
+            messages = q.get("messages", 0)
+            if alive:
+                worker_status = "healthy"
+            elif consumers > 0:
+                worker_status = "healthy"
+            else:
+                worker_status = "unhealthy"
+
+        entry: Dict[str, Any] = {
+            "name": f"worker-{name}",
+            "status": worker_status,
+            "concurrency": consumers,
+            "tasks_processed": {"queued": messages},
+        }
+
+        if is_native:
+            entry["host"] = "host_machine"
+            entry["pid"] = pid
+            if uptime_s is not None:
+                h, r = divmod(uptime_s, 3600)
+                m, s = divmod(r, 60)
+                entry["uptime"] = f"{h}h {m}m {s}s" if h else (f"{m}m {s}s" if m else f"{s}s")
+            if stats:
+                entry["cpu_percent"] = stats.get("cpu_percent", 0)
+                entry["memory_mb"] = stats.get("memory_mb", 0)
+                entry["threads"] = stats.get("threads", 1)
+            entry["label"] = native.get("label", name)
+            entry["description"] = native.get("description", "")
+        elif not alive and consumers == 0:
+            entry["error"] = "No consumers — worker may be down"
+
+        results.append(entry)
 
     return results
 
@@ -732,3 +788,78 @@ async def run_service_action(
             return {"ok": False, "message": f"Purge failed: HTTP {res.status_code}"}
 
     raise HTTPException(status_code=400, detail=f"Unknown action '{action}' for service '{service_id}'")
+
+
+# ---------------------------------------------------------------------------
+# Native worker monitoring endpoints (proxy to host-agent)
+# ---------------------------------------------------------------------------
+
+@router.get("/host-agent")
+async def get_host_agent_status(
+    _: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """Return host-agent process status."""
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            res = await client.get(f"{_HOST_AGENT_URL}/agent/status")
+        if res.status_code == 200:
+            return res.json()
+        return {"status": "offline", "error": f"HTTP {res.status_code}"}
+    except Exception:
+        return {"status": "offline", "pid": None}
+
+
+@router.post("/host-agent/shutdown")
+async def shutdown_host_agent(
+    _: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """Tell the host agent to shut down."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.post(f"{_HOST_AGENT_URL}/agent/shutdown")
+        if res.status_code == 200:
+            return res.json()
+        raise HTTPException(status_code=502, detail=f"Host agent returned HTTP {res.status_code}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}")
+
+async def list_native_workers(
+    _: User = Depends(get_current_active_user),
+) -> List[Dict[str, Any]]:
+    """Return native worker status from host-agent (PID, uptime, CPU/RAM, last logs)."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(f"{_HOST_AGENT_URL}/workers/status")
+        if res.status_code == 200:
+            return res.json()
+        raise HTTPException(status_code=502, detail=f"Host agent returned HTTP {res.status_code}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}")
+
+
+@router.get("/workers/{name}/logs")
+async def get_native_worker_logs(
+    name: str,
+    tail: int = 200,
+    stream: str = "stderr",
+    _: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """Return recent log lines for a native worker via host-agent proxy."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(
+                f"{_HOST_AGENT_URL}/workers/{name}/logs",
+                params={"tail": tail, "stream": stream},
+            )
+        if res.status_code == 200:
+            return res.json()
+        raise HTTPException(status_code=502, detail=f"Host agent returned HTTP {res.status_code}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}")
+

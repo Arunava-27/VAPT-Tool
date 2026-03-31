@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RefreshCw, Search, X, ChevronDown, FileText, Shield } from 'lucide-react'
+import { RefreshCw, Search, X, ChevronDown, FileText, Shield, Monitor, Circle } from 'lucide-react'
 import clsx from 'clsx'
+import { useSearchParams } from 'react-router-dom'
 import {
   listContainers,
   getContainerLogs,
   getAuditLogs,
+  getWorkerLogs,
   type ContainerInfo,
   type LogLine,
   type AuditLogEntry,
+  type WorkerLogLine,
 } from '../../api/logs'
+import { getNativeWorkers, type NativeWorkerStatus } from '../../api/infra'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -71,7 +75,10 @@ type LevelFilter = 'all' | Level
 // ── component ────────────────────────────────────────────────────────────────
 
 export default function LogsPage() {
-  const [activeTab, setActiveTab] = useState<'containers' | 'audit'>('containers')
+  const [searchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState<'containers' | 'workers' | 'audit'>(() => {
+    return searchParams.get('worker') ? 'workers' : 'containers'
+  })
 
   // ── Container logs state ──────────────────────────────────────────────────
   const [containers, setContainers] = useState<ContainerInfo[]>([])
@@ -102,6 +109,21 @@ export default function LogsPage() {
   const [auditSearch, setAuditSearch] = useState('')
   const [auditSearchInput, setAuditSearchInput] = useState('')
 
+  // ── Worker log state ───────────────────────────────────────────────────────
+  const [nativeWorkers, setNativeWorkers] = useState<NativeWorkerStatus[]>([])
+  const [workersLoading, setWorkersLoading] = useState(false)
+  const [selectedWorker, setSelectedWorker] = useState<string | null>(() => searchParams.get('worker'))
+  const [workerLines, setWorkerLines] = useState<WorkerLogLine[]>([])
+  const [workerLogsLoading, setWorkerLogsLoading] = useState(false)
+  const [workerLogsError, setWorkerLogsError] = useState<string | null>(null)
+  const [workerTail, setWorkerTail] = useState(200)
+  const [workerStream, setWorkerStream] = useState<'stdout' | 'stderr' | 'all'>('all')
+  const [workerSearch, setWorkerSearch] = useState('')
+  const [workerAutoRefresh, setWorkerAutoRefresh] = useState(true)
+  const workerScrollRef = useRef<HTMLDivElement>(null)
+  const workerScrolledUp = useRef(false)
+  const workerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   const fetchAuditLogs = useCallback(async (page: number, action?: string) => {
     setAuditLoading(true)
     setAuditError(null)
@@ -120,6 +142,64 @@ export default function LogsPage() {
   useEffect(() => {
     if (activeTab === 'audit') fetchAuditLogs(1)
   }, [activeTab, fetchAuditLogs])
+
+  // ── Worker log fetch ───────────────────────────────────────────────────────
+
+  const fetchNativeWorkers = useCallback(async () => {
+    setWorkersLoading(true)
+    try {
+      const r = await getNativeWorkers()
+      setNativeWorkers(r.data)
+    } catch {
+      // silently fail — host agent may not be running
+    } finally {
+      setWorkersLoading(false)
+    }
+  }, [])
+
+  const fetchWorkerLogs = useCallback(async (name: string, tailN: number, stream: 'stdout' | 'stderr' | 'all') => {
+    setWorkerLogsLoading(true)
+    setWorkerLogsError(null)
+    try {
+      const r = await getWorkerLogs(name, tailN, stream)
+      setWorkerLines(r.data.lines)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } }
+      setWorkerLogsError(err?.response?.data?.detail ?? 'Failed to fetch worker logs')
+    } finally {
+      setWorkerLogsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'workers') {
+      fetchNativeWorkers()
+    }
+  }, [activeTab, fetchNativeWorkers])
+
+  useEffect(() => {
+    if (activeTab === 'workers' && selectedWorker) {
+      fetchWorkerLogs(selectedWorker, workerTail, workerStream)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWorker, activeTab])
+
+  useEffect(() => {
+    if (!workerScrolledUp.current && workerScrollRef.current) {
+      workerScrollRef.current.scrollTop = workerScrollRef.current.scrollHeight
+    }
+  }, [workerLines])
+
+  useEffect(() => {
+    if (workerIntervalRef.current) clearInterval(workerIntervalRef.current)
+    if (workerAutoRefresh && selectedWorker && activeTab === 'workers') {
+      workerIntervalRef.current = setInterval(() => {
+        fetchWorkerLogs(selectedWorker, workerTail, workerStream)
+        fetchNativeWorkers()
+      }, 3000)
+    }
+    return () => { if (workerIntervalRef.current) clearInterval(workerIntervalRef.current) }
+  }, [workerAutoRefresh, selectedWorker, workerTail, workerStream, activeTab, fetchWorkerLogs, fetchNativeWorkers])
 
   useEffect(() => {
     setContainersLoading(true)
@@ -260,6 +340,19 @@ export default function LogsPage() {
           <FileText className="w-3.5 h-3.5" /> Container Logs
         </button>
         <button
+          onClick={() => setActiveTab('workers')}
+          className={clsx(
+            'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t transition-colors border-b-2',
+            activeTab === 'workers'
+              ? 'text-cyber-primary border-cyber-primary'
+              : 'text-slate-400 border-transparent hover:text-white'
+          )}>
+          <Monitor className="w-3.5 h-3.5" /> Worker Logs
+          <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] bg-cyber-primary/20 border border-cyber-primary/30 text-cyber-primary">
+            Host
+          </span>
+        </button>
+        <button
           onClick={() => setActiveTab('audit')}
           className={clsx(
             'flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-t transition-colors border-b-2',
@@ -271,7 +364,221 @@ export default function LogsPage() {
         </button>
       </div>
 
-      {activeTab === 'audit' ? (
+      {activeTab === 'workers' ? (
+        /* ── Worker Logs panel ── */
+        <div className="flex flex-1 bg-cyber-bg text-white overflow-hidden">
+          {/* Left panel: worker list */}
+          <aside className="w-64 flex-shrink-0 border-r border-cyber-border bg-cyber-surface flex flex-col overflow-hidden">
+            <div className="px-4 py-3 border-b border-cyber-border flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-200">Native Workers</h2>
+              <button onClick={fetchNativeWorkers} disabled={workersLoading}
+                className="text-slate-500 hover:text-white transition-colors">
+                <RefreshCw className={clsx('w-3.5 h-3.5', workersLoading && 'animate-spin')} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto py-2">
+              {workersLoading && nativeWorkers.length === 0 && (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="w-5 h-5 animate-spin text-cyber-primary" />
+                </div>
+              )}
+              {!workersLoading && nativeWorkers.length === 0 && (
+                <p className="px-4 py-3 text-xs text-slate-600">Host agent not reachable. Start it with host-agent/start.bat</p>
+              )}
+              {nativeWorkers.map(w => (
+                <button
+                  key={w.name}
+                  onClick={() => {
+                    setSelectedWorker(w.name)
+                    setWorkerLines([])
+                    workerScrolledUp.current = false
+                    fetchWorkerLogs(w.name, workerTail, workerStream)
+                  }}
+                  className={clsx(
+                    'w-full flex items-center gap-2 px-4 py-2.5 text-left transition-colors',
+                    selectedWorker === w.name
+                      ? 'bg-cyber-primary/10 border-l-2 border-cyber-primary'
+                      : 'border-l-2 border-transparent hover:bg-cyber-border'
+                  )}
+                >
+                  <Circle className={clsx('w-2 h-2 flex-shrink-0 fill-current',
+                    w.status === 'running' ? 'text-emerald-400' : 'text-rose-400'
+                  )} />
+                  <div className="min-w-0 flex-1">
+                    <p className={clsx('text-xs font-medium truncate',
+                      selectedWorker === w.name ? 'text-cyber-primary' : 'text-slate-300'
+                    )}>{w.label}</p>
+                    <p className="text-[10px] text-slate-600 truncate">
+                      {w.status === 'running' ? `PID ${w.pid}` : w.status}
+                    </p>
+                  </div>
+                  {w.stats?.memory_mb && (
+                    <span className="text-[10px] text-slate-600 font-mono flex-shrink-0">{w.stats.memory_mb}MB</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {/* Worker auto-refresh toggle */}
+            <div className="border-t border-cyber-border p-3">
+              <button
+                onClick={() => setWorkerAutoRefresh(v => !v)}
+                className={clsx(
+                  'w-full flex items-center justify-center gap-1.5 py-1.5 rounded border text-xs transition-colors',
+                  workerAutoRefresh
+                    ? 'border-cyber-primary text-cyber-primary bg-cyber-primary/10'
+                    : 'border-cyber-border text-slate-400 hover:text-white'
+                )}
+              >
+                <RefreshCw className={clsx('w-3 h-3', workerAutoRefresh && 'animate-spin')} />
+                {workerAutoRefresh ? 'Auto (3s)' : 'Manual refresh'}
+              </button>
+            </div>
+          </aside>
+
+          {/* Right panel: worker log viewer */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {!selectedWorker ? (
+              <div className="flex-1 flex items-center justify-center text-slate-600">
+                <div className="text-center space-y-2">
+                  <Monitor className="w-8 h-8 mx-auto opacity-30" />
+                  <p className="text-sm">Select a worker to view its logs</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Controls */}
+                <div className="flex-shrink-0 border-b border-cyber-border bg-cyber-surface px-4 py-3 flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 flex-1">
+                    <h3 className="text-sm font-semibold text-white font-mono">
+                      {nativeWorkers.find(w => w.name === selectedWorker)?.label ?? selectedWorker}
+                    </h3>
+                    {(() => {
+                      const w = nativeWorkers.find(w => w.name === selectedWorker)
+                      if (!w) return null
+                      return (
+                        <span className={clsx('text-xs px-1.5 py-0.5 rounded border font-mono',
+                          w.status === 'running'
+                            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                            : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                        )}>
+                          {w.status}
+                        </span>
+                      )
+                    })()}
+                  </div>
+                  {/* Tail selector */}
+                  <div className="relative">
+                    <select
+                      value={workerTail}
+                      onChange={e => {
+                        const t = Number(e.target.value)
+                        setWorkerTail(t)
+                        if (selectedWorker) fetchWorkerLogs(selectedWorker, t, workerStream)
+                      }}
+                      className="appearance-none bg-cyber-bg border border-cyber-border text-slate-300 text-xs rounded px-2 py-1 pr-6 focus:outline-none focus:border-cyber-primary cursor-pointer"
+                    >
+                      {TAIL_OPTIONS.map(t => <option key={t} value={t}>{t} lines</option>)}
+                    </select>
+                    <ChevronDown className="w-3 h-3 text-slate-500 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  </div>
+                  {/* Stream filter */}
+                  <div className="flex rounded border border-cyber-border overflow-hidden text-xs">
+                    {(['all', 'stdout', 'stderr'] as const).map(s => (
+                      <button key={s} onClick={() => {
+                        setWorkerStream(s)
+                        if (selectedWorker) fetchWorkerLogs(selectedWorker, workerTail, s)
+                      }}
+                        className={clsx('px-2 py-1 transition-colors',
+                          workerStream === s
+                            ? 'bg-cyber-primary text-cyber-bg font-semibold'
+                            : 'text-slate-400 hover:text-white hover:bg-cyber-border'
+                        )}
+                      >{s}</button>
+                    ))}
+                  </div>
+                  {/* Search */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Filter…"
+                      value={workerSearch}
+                      onChange={e => setWorkerSearch(e.target.value)}
+                      className="bg-cyber-bg border border-cyber-border rounded text-xs text-slate-300 placeholder-slate-600 pl-7 pr-6 py-1 w-40 focus:outline-none focus:border-cyber-primary"
+                    />
+                    {workerSearch && (
+                      <button onClick={() => setWorkerSearch('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                  {/* Manual refresh */}
+                  <button
+                    onClick={() => selectedWorker && fetchWorkerLogs(selectedWorker, workerTail, workerStream)}
+                    disabled={workerLogsLoading}
+                    className="flex items-center gap-1 px-2 py-1 rounded border border-cyber-border text-xs text-slate-400 hover:text-white hover:bg-cyber-border disabled:opacity-50"
+                  >
+                    <RefreshCw className={clsx('w-3 h-3', workerLogsLoading && 'animate-spin')} />
+                  </button>
+                </div>
+
+                {/* Log area */}
+                <div
+                  ref={workerScrollRef}
+                  onScroll={() => {
+                    if (!workerScrollRef.current) return
+                    const { scrollTop, scrollHeight, clientHeight } = workerScrollRef.current
+                    workerScrolledUp.current = scrollHeight - scrollTop - clientHeight > 80
+                  }}
+                  className="flex-1 overflow-y-auto font-mono text-xs bg-[#070c1a] p-3 space-y-0.5"
+                >
+                  {workerLogsLoading && workerLines.length === 0 && (
+                    <div className="flex items-center justify-center py-12">
+                      <RefreshCw className="w-5 h-5 animate-spin text-cyber-primary" />
+                    </div>
+                  )}
+                  {workerLogsError && (
+                    <p className="text-rose-400 py-4 text-center">{workerLogsError}</p>
+                  )}
+                  {!workerLogsLoading && !workerLogsError && workerLines.length === 0 && (
+                    <p className="text-slate-600 py-4 text-center">No log lines found. The worker may not have run any tasks yet.</p>
+                  )}
+                  {workerLines
+                    .filter(l => !workerSearch || l.text.toLowerCase().includes(workerSearch.toLowerCase()))
+                    .map((l, i) => {
+                      const { ts, message } = parseTimestamp(l.text)
+                      const level = detectLevel(l.text)
+                      const badgeCls = LEVEL_BADGE[level]
+                      const textCls = LEVEL_TEXT[level]
+                      return (
+                        <div key={i} className="flex items-start gap-2 py-0.5 hover:bg-white/5 rounded px-1">
+                          {ts && <span className="text-slate-600 flex-shrink-0 select-none w-[92px]">{ts}</span>}
+                          {badgeCls && (
+                            <span className={clsx('flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] leading-none', badgeCls)}>
+                              {level}
+                            </span>
+                          )}
+                          {l.stream === 'stderr' && (
+                            <span className="flex-shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-rose-900/40 text-rose-400 border border-rose-700/30">
+                              err
+                            </span>
+                          )}
+                          <span className={clsx('break-all', textCls)}>{message || l.text}</span>
+                        </div>
+                      )
+                    })}
+                </div>
+
+                {/* Footer */}
+                <div className="flex-shrink-0 border-t border-cyber-border bg-cyber-surface px-4 py-1.5 flex items-center justify-between text-[10px] text-slate-600">
+                  <span>{workerLines.filter(l => !workerSearch || l.text.toLowerCase().includes(workerSearch.toLowerCase())).length} / {workerLines.length} lines</span>
+                  <span>{selectedWorker} worker · host machine</span>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : activeTab === 'audit' ? (
         /* ── Audit Logs panel ── */
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Controls */}

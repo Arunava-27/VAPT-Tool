@@ -160,7 +160,7 @@ function CloudCredentialsCard() {
                   {cred && (
                     <div className="mt-3 p-3 bg-cyber-bg rounded-lg text-xs text-slate-500">
                       <p className="font-semibold text-slate-400 mb-1">Saved credentials (masked):</p>
-                      {Object.entries(cred.config).map(([k, v]) => (
+                      {Object.entries(cred.credentials).map(([k, v]) => (
                         <div key={k} className="flex justify-between">
                           <span>{k}</span>
                           <span className="font-mono">{v}</span>

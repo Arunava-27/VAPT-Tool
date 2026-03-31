@@ -1,9 +1,15 @@
 """
 Docker container logs endpoints.
-Accesses Docker Engine API via Unix socket (mounted at /var/run/docker.sock).
+- On Linux/Docker: uses Unix socket at /var/run/docker.sock
+- On Windows (native): uses docker CLI subprocess (Docker Desktop must be running)
 """
+import asyncio
+import json
+import os
 import re
 import struct
+import subprocess
+import sys
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -19,8 +25,11 @@ from ....db.session import get_db
 router = APIRouter()
 
 DOCKER_SOCKET = "/var/run/docker.sock"
+DOCKER_TCP_URL = os.environ.get("DOCKER_HOST", "http://localhost:2375")
 
-# Container categories for UI grouping
+def _is_windows_native() -> bool:
+    return sys.platform == "win32"
+
 CONTAINER_CATEGORIES = {
     "data": ["vapt-postgres", "vapt-redis", "vapt-rabbitmq", "vapt-elasticsearch", "vapt-minio", "vapt-vault"],
     "backend": ["vapt-api-gateway", "vapt-orchestrator", "vapt-ai-engine", "vapt-ollama"],
@@ -40,9 +49,72 @@ def _get_category(name: str) -> str:
 
 
 async def _docker_get(path: str, **kwargs) -> httpx.Response:
-    transport = httpx.AsyncHTTPTransport(uds=DOCKER_SOCKET)
-    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
-        return await client.get(path, timeout=10.0, **kwargs)
+    """Call Docker Engine API.
+    - Windows: uses 'docker' CLI via subprocess (named pipe internally)
+    - Linux:   uses Unix socket at /var/run/docker.sock
+    """
+    if _is_windows_native():
+        return await _docker_get_win(path, **kwargs)
+    else:
+        transport = httpx.AsyncHTTPTransport(uds=DOCKER_SOCKET)
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+            return await client.get(path, timeout=10.0, **kwargs)
+
+
+async def _docker_get_win(path: str, params: dict = None, **_) -> "httpx.Response":
+    """Windows-only: run docker CLI in a thread (avoids asyncio subprocess issues on Windows)."""
+    import json as _json
+    import concurrent.futures
+
+    loop = asyncio.get_event_loop()
+
+    def _run_docker(cmd):
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        return result.stdout, result.stderr, result.returncode
+
+    if path == "/containers/json":
+        all_flag = "--all" if (params or {}).get("all") == "true" else ""
+        cmd = ["docker", "ps", "--format", "{{json .}}"]
+        if all_flag:
+            cmd.append(all_flag)
+        stdout, _, _ = await loop.run_in_executor(None, _run_docker, cmd)
+        items = [_json.loads(l) for l in stdout.splitlines() if l.strip()]
+        containers = []
+        for c in items:
+            containers.append({
+                "Id": c.get("ID", "") + "0" * 52,
+                "Names": ["/" + c.get("Names", "")],
+                "Image": c.get("Image", ""),
+                "Status": c.get("Status", ""),
+                "State": c.get("State", "running" if "Up" in c.get("Status", "") else "exited"),
+            })
+        return _FakeResponse(200, containers)
+
+    m = re.match(r"/containers/([^/]+)/logs", path)
+    if m:
+        cid = m.group(1)
+        tail = str((params or {}).get("tail", "300"))
+        cmd = ["docker", "logs", "--tail", tail, "--timestamps", cid]
+        stdout, stderr, _ = await loop.run_in_executor(None, _run_docker, cmd)
+        combined = (stdout + stderr).encode("utf-8", errors="replace")
+        return _FakeResponse(200, None, raw=combined)
+
+    raise RuntimeError(f"_docker_get_win: unhandled path {path}")
+
+
+class _FakeResponse:
+    """Minimal mock to satisfy callers expecting httpx.Response interface."""
+    def __init__(self, status_code: int, data, raw: bytes = b""):
+        self.status_code = status_code
+        self._data = data
+        self.content = raw
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError(str(self.status_code), request=None, response=self)
+
+    def json(self):
+        return self._data
 
 
 def _parse_docker_log_stream(raw: bytes) -> List[Dict[str, str]]:
@@ -85,7 +157,7 @@ async def list_containers(
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Docker socket unavailable: {exc}")
+        raise HTTPException(status_code=503, detail=f"Docker unavailable: {exc}")
 
     containers = []
     for c in data:

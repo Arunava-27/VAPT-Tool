@@ -594,6 +594,145 @@ async def scan_node(body: ScanNodeRequest) -> ScanNodeResponse:
     )
 
 
+# ─── Worker monitoring ────────────────────────────────────────────────────────
+
+import json as _json
+import psutil
+from pathlib import Path
+from fastapi.responses import StreamingResponse
+
+_WORKERS_DIR = Path(__file__).parent.parent / "workers"
+_PID_FILE    = _WORKERS_DIR / ".native-worker-pids.json"
+_LOGS_DIR    = _WORKERS_DIR / "logs"
+
+WORKER_META = {
+    "nmap":       {"label": "Nmap Scanner",    "queue": "nmap",       "description": "Real LAN port & service discovery"},
+    "trivy":      {"label": "Trivy Scanner",   "queue": "trivy",      "description": "Container & image vulnerability scanning"},
+    "prowler":    {"label": "Prowler Scanner", "queue": "prowler",    "description": "Cloud security posture assessment"},
+    "zap":        {"label": "OWASP ZAP",       "queue": "zap",        "description": "Web application vulnerability scanning"},
+    "metasploit": {"label": "Metasploit",      "queue": "metasploit", "description": "Exploitation framework & testing"},
+}
+
+
+def _read_pids() -> Dict[str, int]:
+    try:
+        if _PID_FILE.exists():
+            return _json.loads(_PID_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        p = psutil.Process(pid)
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+    except Exception:
+        return False
+
+
+def _process_stats(pid: int) -> Dict[str, Any]:
+    try:
+        p = psutil.Process(pid)
+        with p.oneshot():
+            return {
+                "cpu_percent": p.cpu_percent(interval=0.1),
+                "memory_mb": round(p.memory_info().rss / 1024 / 1024, 1),
+                "threads": p.num_threads(),
+                "status": p.status(),
+                "create_time": p.create_time(),
+            }
+    except Exception:
+        return {}
+
+
+def _tail_log(path: Path, lines: int = 100) -> List[str]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return text.splitlines()[-lines:]
+    except Exception:
+        return []
+
+
+@app.get("/workers/status")
+def get_workers_status():
+    """Return status of all native Celery workers tracked by PID file."""
+    pids = _read_pids()
+    result = []
+    for name, meta in WORKER_META.items():
+        pid = pids.get(name)
+        alive = _process_alive(pid) if pid else False
+        stats = _process_stats(pid) if (pid and alive) else {}
+        log_file  = _LOGS_DIR / f"{name}.log"
+        err_file  = _LOGS_DIR / f"{name}-err.log"
+        last_lines = _tail_log(err_file, 5) if err_file.exists() else []
+        result.append({
+            "name": name,
+            "label": meta["label"],
+            "queue": meta["queue"],
+            "description": meta["description"],
+            "status": "running" if alive else ("stopped" if pid else "not_started"),
+            "pid": pid,
+            "alive": alive,
+            "stats": stats,
+            "log_file": str(log_file),
+            "err_file": str(err_file),
+            "last_log_lines": last_lines,
+        })
+    return result
+
+
+@app.get("/workers/{name}/logs")
+def get_worker_logs(name: str, tail: int = 200, stream: str = "stderr"):
+    """Return recent log lines for a worker. stream=stdout|stderr|all"""
+    if name not in WORKER_META:
+        return {"error": f"Unknown worker: {name}", "lines": []}
+    log_file = _LOGS_DIR / f"{name}.log"
+    err_file = _LOGS_DIR / f"{name}-err.log"
+    lines = []
+    if stream in ("stdout", "all") and log_file.exists():
+        lines += [{"stream": "stdout", "text": l} for l in _tail_log(log_file, tail)]
+    if stream in ("stderr", "all") and err_file.exists():
+        lines += [{"stream": "stderr", "text": l} for l in _tail_log(err_file, tail)]
+    return {"worker": name, "lines": lines[-tail:], "total": len(lines)}
+
+
+# ─── Self-management ──────────────────────────────────────────────────────────
+
+import signal as _signal
+import threading as _threading
+
+@app.get("/agent/status")
+def agent_status():
+    """Return host-agent process info."""
+    pid = os.getpid()
+    try:
+        p = psutil.Process(pid)
+        with p.oneshot():
+            return {
+                "status": "online",
+                "pid": pid,
+                "uptime_s": round(psutil.time.time() - p.create_time()),
+                "memory_mb": round(p.memory_info().rss / 1024 / 1024, 1),
+                "cpu_percent": p.cpu_percent(interval=0.1),
+                "version": "1.0.0",
+                "port": 9999,
+            }
+    except Exception as exc:
+        return {"status": "online", "pid": pid, "error": str(exc)}
+
+
+@app.post("/agent/shutdown")
+def agent_shutdown():
+    """Gracefully shut down the host agent."""
+    def _stop():
+        import time
+        time.sleep(0.5)
+        os.kill(os.getpid(), _signal.SIGTERM)
+    _threading.Thread(target=_stop, daemon=True).start()
+    return {"ok": True, "message": "Host agent shutting down…"}
+
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

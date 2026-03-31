@@ -45,3 +45,17 @@ export const getAuditLogs = (page = 1, perPage = 50, action?: string, resourceTy
   apiClient.get<AuditLogsResponse>('/api/v1/logs/audit', {
     params: { page, per_page: perPage, ...(action ? { action } : {}), ...(resourceType ? { resource_type: resourceType } : {}) },
   })
+
+// Native worker logs (via host-agent proxy)
+export interface WorkerLogLine {
+  text: string
+  stream: 'stdout' | 'stderr'
+}
+export interface WorkerLogs {
+  worker: string
+  lines: WorkerLogLine[]
+  total: number
+}
+export const getWorkerLogs = (name: string, tail = 200, stream: 'stdout' | 'stderr' | 'all' = 'all') =>
+  apiClient.get<WorkerLogs>(`/api/v1/health/workers/${name}/logs`, { params: { tail, stream } })
+
