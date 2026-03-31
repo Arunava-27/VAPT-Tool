@@ -495,23 +495,111 @@ async def delete_node(
     return {"ok": True, "message": f"Node {node_id} deleted"}
 
 
+@router.get("/capture-interfaces")
+async def capture_interfaces(
+    _: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """Return interfaces available for packet capture via scapy/Npcap."""
+    try:
+        from scapy.arch.windows import get_windows_if_list
+        skip = {"WFP", "QoS", "NDIS", "Pseudo", "Loopback", "Npcap Loopback",
+                "Teredo", "ISATAP", "6to4", "WAN Miniport", "PPTP", "L2TP",
+                "IKEv2", "SSTP", "PPPOE", "Miniport"}
+        seen, result = set(), []
+        for iface in get_windows_if_list():
+            ips = [ip for ip in iface.get("ips", []) if ":" not in ip and ip != "127.0.0.1"]
+            name = iface.get("name", "")
+            desc = iface.get("description", "")
+            if any(k in name for k in skip) or any(k in desc for k in skip):
+                continue
+            if not ips:
+                continue
+            key = tuple(sorted(ips))
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append({"name": name, "description": desc, "ips": ips})
+        return {"interfaces": result}
+    except Exception as exc:
+        return {"interfaces": [], "error": str(exc)}
+
+
 @router.get("/host-interfaces")
 async def host_interfaces(
     _: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     """
-    Get network interfaces from the nmap worker (runs with host networking).
-    These reflect the Docker host's REAL LAN interfaces, unlike /status which
-    shows Docker bridge IPs inside the api-gateway container.
+    Get network interfaces from the host agent (runs natively on the Windows host).
+    Falls back to a local Python-based detection if the host agent is unavailable.
     """
+    import ipaddress
+
+    def _local_interfaces():
+        """Fallback: detect interfaces via ipconfig (Windows only)."""
+        ifaces = []
+        try:
+            r = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=5)
+            adapter = None
+            ip = None
+            for line in r.stdout.splitlines():
+                stripped = line.strip()
+                if "adapter" in stripped.lower() and stripped.endswith(":"):
+                    adapter = stripped.rstrip(":")
+                    ip = None
+                elif "IPv4" in stripped or "IP Address" in stripped:
+                    m = re.search(r"(\d+\.\d+\.\d+\.\d+)", stripped)
+                    if m:
+                        ip = m.group(1)
+                        try:
+                            net = ipaddress.ip_network(f"{ip}/24", strict=False)
+                            ifaces.append({
+                                "interface": adapter or "unknown",
+                                "ip": ip,
+                                "prefix": 24,
+                                "network_range": str(net),
+                                "family": "inet",
+                                "is_docker": "docker" in (adapter or "").lower() or ip.startswith("172."),
+                                "is_lan": not ip.startswith("127.") and not ip.startswith("172."),
+                            })
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return ifaces
+
     try:
-        celery = _get_celery_app()
-        task = celery.send_task("nmap.get_interfaces", queue="nmap")
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, lambda: task.get(timeout=10))
-        ifaces = result.get("interfaces", []) if isinstance(result, dict) else []
-        gateway_ip = result.get("gateway_ip") if isinstance(result, dict) else None
-        err = result.get("error") if isinstance(result, dict) else None
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{HOST_AGENT_URL}/interfaces")
+            resp.raise_for_status()
+            data = resp.json()
+
+        raw = data.get("interfaces", [])
+        ifaces = []
+        for r in raw:
+            ip = r.get("ip", "")
+            try:
+                net = ipaddress.ip_network(f"{ip}/24", strict=False)
+                network_range = str(net)
+            except Exception:
+                network_range = f"{ip}/24"
+            name = r.get("interface", "")
+            is_docker = (
+                "docker" in name.lower()
+                or "vethernet" in name.lower()
+                or ip.startswith("172.")
+                or ip.startswith("10.0.")
+            )
+            is_lan = r.get("is_private", False) and not is_docker and not ip.startswith("127.")
+            ifaces.append({
+                "interface": name,
+                "ip": ip,
+                "prefix": 24,
+                "network_range": network_range,
+                "family": "inet",
+                "is_docker": is_docker,
+                "is_lan": is_lan,
+            })
+
         lan_ifaces = [i for i in ifaces if i.get("is_lan")]
         docker_only = len(ifaces) > 0 and len(lan_ifaces) == 0
         return {
@@ -520,17 +608,21 @@ async def host_interfaces(
             "docker_only": docker_only,
             "has_lan_access": len(lan_ifaces) > 0,
             "primary_range": lan_ifaces[0]["network_range"] if lan_ifaces else None,
-            "gateway_ip": gateway_ip,
-            "error": err,
+            "gateway_ip": None,
+            "error": None,
         }
-    except Exception as exc:
+    except Exception:
+        # Fallback to local subprocess detection
+        ifaces = _local_interfaces()
+        lan_ifaces = [i for i in ifaces if i.get("is_lan")]
         return {
-            "interfaces": [],
-            "lan_interfaces": [],
-            "docker_only": None,
-            "has_lan_access": False,
-            "primary_range": None,
-            "error": str(exc),
+            "interfaces": ifaces,
+            "lan_interfaces": lan_ifaces,
+            "docker_only": len(ifaces) > 0 and len(lan_ifaces) == 0,
+            "has_lan_access": len(lan_ifaces) > 0,
+            "primary_range": lan_ifaces[0]["network_range"] if lan_ifaces else None,
+            "gateway_ip": None,
+            "error": None,
         }
 
 
@@ -899,4 +991,192 @@ async def import_scan_results(
         "nodes_imported": len(saved_nodes),
         "network_range": body.network_range,
         "nodes": saved_nodes,
+    }
+
+
+# ─── Traffic Monitor ──────────────────────────────────────────────────────────
+
+@router.get("/traffic")
+async def get_traffic(
+    _: User = Depends(get_current_active_user),
+) -> Dict[str, Any]:
+    """
+    Return active network connections on the host using psutil.
+    Filters out loopback connections; enriches with process name where available.
+    """
+    try:
+        import psutil
+        connections = []
+        for c in psutil.net_connections(kind="inet"):
+            laddr = c.laddr
+            raddr = c.raddr
+            if not raddr:
+                continue
+            local_ip = laddr.ip if laddr else ""
+            remote_ip = raddr.ip if raddr else ""
+            # Skip pure-loopback
+            if local_ip in ("127.0.0.1", "::1") and remote_ip in ("127.0.0.1", "::1"):
+                continue
+            proc_name = None
+            try:
+                if c.pid:
+                    p = psutil.Process(c.pid)
+                    proc_name = p.name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            connections.append({
+                "local_ip": local_ip,
+                "local_port": laddr.port if laddr else None,
+                "remote_ip": remote_ip,
+                "remote_port": raddr.port if raddr else None,
+                "status": c.status or "NONE",
+                "pid": c.pid,
+                "process_name": proc_name,
+                "family": "IPv6" if ":" in local_ip else "IPv4",
+            })
+        # Sort: ESTABLISHED first, then by remote_ip
+        connections.sort(key=lambda x: (x["status"] != "ESTABLISHED", x["remote_ip"]))
+        return {"connections": connections, "total": len(connections), "error": None}
+    except Exception as exc:
+        return {"connections": [], "total": 0, "error": str(exc)}
+
+
+# ─── Topology ─────────────────────────────────────────────────────────────────
+
+@router.get("/topology")
+async def get_topology(
+    _: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Return a topology graph (nodes + edges) derived from discovered NetworkNodes.
+    All nodes are connected to the detected gateway. The host machine is also
+    included as a special node.
+    """
+    import ipaddress
+    import socket as _socket
+
+    db_nodes = db.query(NetworkNode).filter(NetworkNode.status == "active").all()
+
+    # Detect gateway and host IP from host-agent
+    gateway_ip: Optional[str] = None
+    host_ip: Optional[str] = None
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{HOST_AGENT_URL}/interfaces")
+            if resp.status_code == 200:
+                data = resp.json()
+                ifaces = data.get("interfaces", [])
+                # Pick first private (non-WSL) IP as host IP
+                for iface in ifaces:
+                    ip = iface.get("ip", "")
+                    name = iface.get("interface", "")
+                    if (
+                        ip and iface.get("is_private")
+                        and not ip.startswith("172.")
+                        and "wsl" not in name.lower()
+                        and "docker" not in name.lower()
+                    ):
+                        host_ip = ip
+                        break
+    except Exception:
+        pass
+
+    try:
+        host_ip = host_ip or _socket.gethostbyname(_socket.gethostname())
+    except Exception:
+        pass
+
+    # Guess gateway: first .1 on the host subnet
+    if host_ip and not gateway_ip:
+        try:
+            net = ipaddress.ip_network(f"{host_ip}/24", strict=False)
+            gateway_ip = str(list(net.hosts())[0])  # x.x.x.1
+        except Exception:
+            pass
+
+    topo_nodes = []
+    topo_edges = []
+    used_ids: set = set()
+
+    def _safe_id(ip: str) -> str:
+        return f"node-{ip.replace('.', '-').replace(':', '-')}"
+
+    # Gateway node
+    gw_id = _safe_id(gateway_ip) if gateway_ip else "node-gateway"
+    topo_nodes.append({
+        "id": gw_id,
+        "type": "gateway",
+        "ip": gateway_ip or "gateway",
+        "hostname": "Gateway / Router",
+        "device_type": "router",
+        "risk_score": 0,
+        "open_ports": [],
+        "services": [],
+        "status": "active",
+        "is_gateway": True,
+        "is_host": False,
+    })
+    used_ids.add(gw_id)
+
+    # Host machine node
+    if host_ip:
+        host_id = _safe_id(host_ip)
+        if host_id not in used_ids:
+            topo_nodes.append({
+                "id": host_id,
+                "type": "host",
+                "ip": host_ip,
+                "hostname": _socket.gethostname(),
+                "device_type": "pc",
+                "risk_score": 0,
+                "open_ports": [],
+                "services": [],
+                "status": "active",
+                "is_gateway": False,
+                "is_host": True,
+            })
+            used_ids.add(host_id)
+            topo_edges.append({
+                "id": f"edge-{host_id}-{gw_id}",
+                "source": host_id,
+                "target": gw_id,
+                "type": "default",
+            })
+
+    # Discovered nodes
+    for n in db_nodes:
+        node_id = _safe_id(n.ip_address)
+        if node_id in used_ids:
+            continue
+        used_ids.add(node_id)
+        topo_nodes.append({
+            "id": node_id,
+            "db_id": str(n.id),
+            "type": "device",
+            "ip": n.ip_address,
+            "hostname": n.hostname,
+            "device_type": n.device_type or "unknown",
+            "risk_score": n.risk_score or 0,
+            "open_ports": n.open_ports or [],
+            "services": n.services or [],
+            "status": n.status,
+            "mac_address": n.mac_address,
+            "os_family": n.os_family,
+            "last_seen_at": n.last_seen_at.isoformat() if n.last_seen_at else None,
+            "is_gateway": False,
+            "is_host": False,
+        })
+        topo_edges.append({
+            "id": f"edge-{node_id}-{gw_id}",
+            "source": node_id,
+            "target": gw_id,
+            "type": "default",
+        })
+
+    return {
+        "nodes": topo_nodes,
+        "edges": topo_edges,
+        "gateway_ip": gateway_ip,
+        "host_ip": host_ip,
     }

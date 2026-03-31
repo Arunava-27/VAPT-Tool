@@ -82,6 +82,76 @@ export interface HostVulnerability {
   discovered_at: string
 }
 
+export interface TrafficConnection {
+  local_ip: string
+  local_port: number | null
+  remote_ip: string
+  remote_port: number | null
+  status: string
+  pid: number | null
+  process_name: string | null
+  family: 'IPv4' | 'IPv6'
+}
+
+export interface TrafficResponse {
+  connections: TrafficConnection[]
+  total: number
+  error: string | null
+}
+
+export interface CapturePacket {
+  type: 'packet'
+  ts: number
+  src: string
+  dst: string
+  sport: number | null
+  dport: number | null
+  proto: string
+  length: number
+  info: string
+  color: string
+  src_mac: string
+  dst_mac: string
+}
+
+export interface CaptureInterface {
+  name: string
+  description: string
+  ips: string[]
+}
+
+export interface TopologyNode {
+  id: string
+  db_id?: string
+  type: 'gateway' | 'host' | 'device'
+  ip: string
+  hostname: string | null
+  device_type: string
+  risk_score: number
+  open_ports: number[]
+  services: Array<{ port: number; service: string }>
+  status: string
+  mac_address?: string | null
+  os_family?: string | null
+  last_seen_at?: string | null
+  is_gateway: boolean
+  is_host: boolean
+}
+
+export interface TopologyEdge {
+  id: string
+  source: string
+  target: string
+  type: string
+}
+
+export interface TopologyData {
+  nodes: TopologyNode[]
+  edges: TopologyEdge[]
+  gateway_ip: string | null
+  host_ip: string | null
+}
+
 export interface NetworkSummary {
   total_nodes: number
   active_nodes: number
@@ -116,3 +186,19 @@ export const getNetworkSummary = () =>
   apiClient.get<NetworkSummary>('/api/v1/network/summary')
 export const updateVulnStatus = (nodeId: string, vulnId: string, status: string) =>
   apiClient.post(`/api/v1/network/nodes/${nodeId}/vulnerabilities/${vulnId}/status`, { status })
+export const getTrafficConnections = () =>
+  apiClient.get<TrafficResponse>('/api/v1/network/traffic')
+export const getTopology = () =>
+  apiClient.get<TopologyData>('/api/v1/network/topology')
+export const getCaptureInterfaces = () =>
+  apiClient.get<{ interfaces: CaptureInterface[] }>('/api/v1/network/capture-interfaces')
+
+// WebSocket URL helpers
+export const getWsBase = () => {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//localhost:8000`
+}
+export const trafficWsUrl   = (token: string, iface?: string, filter?: string) =>
+  `${getWsBase()}/api/v1/ws/traffic?token=${token}${iface ? `&iface=${encodeURIComponent(iface)}` : ''}${filter ? `&filter=${encodeURIComponent(filter)}` : ''}`
+export const discoveryWsUrl = (token: string, range?: string) =>
+  `${getWsBase()}/api/v1/ws/discovery?token=${token}${range ? `&network_range=${encodeURIComponent(range)}` : ''}`

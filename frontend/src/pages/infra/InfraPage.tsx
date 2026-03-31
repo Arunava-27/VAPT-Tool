@@ -2,11 +2,12 @@ import { useState, useCallback, useRef } from 'react'
 import { RefreshCw, Database, Layers, Cpu, HardDrive, Server, Bot, Radio,
   CheckCircle, XCircle, AlertTriangle, Clock, Network, Globe, Container, Cloud, Swords,
   Key, Lock, Trash2, X, Monitor, Activity, MemoryStick, Hash, ExternalLink,
-  Power, PowerOff, Terminal, Copy, Check } from 'lucide-react'
+  Power, PowerOff, Terminal, Copy, Check, Play, Square, Shield } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { getServicesHealth, runServiceAction, getHostAgentStatus, shutdownHostAgent } from '../../api/infra'
 import type { ServiceHealth, ServicesHealthResponse, HostAgentStatus } from '../../api/infra'
+import { startService, stopService } from '../../api/services'
 import { usePolling } from '../../hooks/usePolling'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 import ServiceDrawer from '../../components/infra/ServiceDrawer'
@@ -19,6 +20,7 @@ const CATEGORY_ICON: Record<string, React.ElementType> = {
   search: HardDrive,
   storage: HardDrive,
   backend: Bot,
+  secrets: Shield,
   worker: Cpu,
 }
 
@@ -38,6 +40,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   search: 'Search',
   storage: 'Object Storage',
   backend: 'Backend Service',
+  secrets: 'Secrets Manager',
   worker: 'Worker',
 }
 
@@ -46,6 +49,7 @@ const WORKER_IDS = ['worker-nmap', 'worker-zap', 'worker-trivy', 'worker-prowler
 function StatusIcon({ status }: { status: string }) {
   if (status === 'healthy' || status === 'running') return <CheckCircle className="w-4 h-4 text-emerald-400" />
   if (status === 'degraded') return <AlertTriangle className="w-4 h-4 text-amber-400" />
+  if (status === 'not_started' || status === 'unreachable') return <Clock className="w-4 h-4 text-slate-400" />
   return <XCircle className="w-4 h-4 text-rose-400" />
 }
 
@@ -434,14 +438,16 @@ function HostAgentCard({ status, onRefresh }: { status: HostAgentStatus | null; 
 }
 
 
-function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge, onViewLogs }: {
+function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge, onViewLogs, onStart, onStop }: {
   svc: ServiceHealth
   onClick: () => void
   onVaultUnseal?: () => void
   onVaultInit?: () => void
   onWorkerPurge?: () => void
   onViewLogs?: () => void
-}) {
+  onStart?: () => void
+  onStop?: () => void
+}){
   const Icon = WORKER_ICON[svc.id] ?? CATEGORY_ICON[svc.category] ?? Server
   const isHealthy = svc.status === 'healthy' || svc.status === 'running'
   const isVault = svc.id === 'vault'
@@ -595,13 +601,9 @@ function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge, 
       {/* Worker actions */}
       {isWorker && (
         <div className="mt-3 pt-3 border-t border-cyber-border space-y-2">
-          {(svc.status === 'unhealthy' || svc.status === 'unreachable' || svc.status === 'stopped' || svc.status === 'not_started') && (
-            <div className="p-2 bg-rose-500/5 border border-rose-500/20 rounded-lg">
-              <p className="text-xs text-rose-400">
-                {isNative
-                  ? 'Worker offline. Run: cd workers && .\\start-native.ps1'
-                  : 'Worker offline. Ensure the container is running: docker compose up ' + svc.id}
-              </p>
+          {svc.status === 'not_started' && (
+            <div className="p-2 bg-slate-500/5 border border-slate-500/20 rounded-lg">
+              <p className="text-xs text-slate-400">Optional worker — not installed on this host.</p>
             </div>
           )}
           <div className="flex gap-2">
@@ -614,14 +616,34 @@ function ServiceCard({ svc, onClick, onVaultUnseal, onVaultInit, onWorkerPurge, 
                 View Logs
               </button>
             )}
-            <button
-              onClick={handlePurge}
-              disabled={purging}
-              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-50"
-            >
-              {purging ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-              Purge Queue
-            </button>
+            {onStart && svc.status !== 'healthy' && svc.status !== 'running' && svc.status !== 'not_started' && (
+              <button
+                onClick={e => { e.stopPropagation(); onStart() }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 text-xs font-medium transition-colors"
+              >
+                <Play className="w-3 h-3" />
+                Start
+              </button>
+            )}
+            {onStop && (svc.status === 'healthy' || svc.status === 'running') && (
+              <button
+                onClick={e => { e.stopPropagation(); onStop() }}
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors"
+              >
+                <Square className="w-3 h-3" />
+                Stop
+              </button>
+            )}
+            {onWorkerPurge && (svc.status === 'healthy' || svc.status === 'running') && (
+              <button
+                onClick={handlePurge}
+                disabled={purging}
+                className="px-2 flex items-center justify-center gap-1.5 py-1.5 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-50"
+                title="Purge queue"
+              >
+                {purging ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -666,7 +688,7 @@ function OverallBanner({ data }: { data: ServicesHealthResponse }) {
   )
 }
 
-const ORDERED_CATEGORIES = ['database', 'cache', 'queue', 'search', 'storage', 'backend', 'worker'] as const
+const ORDERED_CATEGORIES = ['database', 'cache', 'queue', 'search', 'storage', 'backend', 'secrets', 'worker'] as const
 
 export default function InfraPage() {
   const navigate = useNavigate()
@@ -715,6 +737,35 @@ export default function InfraPage() {
       toast.success(`Queue purged for ${svcId}`)
     } catch {
       toast.error(`Failed to purge queue for ${svcId}`)
+    }
+  }
+
+  const handleWorkerStart = async (svc: ServiceHealth) => {
+    try {
+      const res = await startService(svc.id)
+      if (res.ok) {
+        toast.success(`${svc.name} started`)
+        setTimeout(fetchHealth, 1500)
+      } else {
+        toast.error(res.message || `Failed to start ${svc.name}`)
+      }
+    } catch {
+      toast.error(`Failed to start ${svc.name}`)
+    }
+  }
+
+  const handleWorkerStop = async (svc: ServiceHealth) => {
+    if (!confirm(`Stop ${svc.name}? It will no longer process scan tasks until restarted.`)) return
+    try {
+      const res = await stopService(svc.id)
+      if (res.ok) {
+        toast.success(`${svc.name} stopped`)
+        setTimeout(fetchHealth, 1500)
+      } else {
+        toast.error(res.message || `Failed to stop ${svc.name}`)
+      }
+    } catch {
+      toast.error(`Failed to stop ${svc.name}`)
     }
   }
 
@@ -787,7 +838,7 @@ export default function InfraPage() {
             {(() => { const I = CATEGORY_ICON[cat] ?? Server; return <I className="w-3.5 h-3.5" /> })()}
             {cat === 'worker' ? 'Security Workers' : (CATEGORY_LABEL[cat] ?? cat) + 's'}
             <span className="ml-auto text-slate-600 font-normal normal-case">
-              {svcs.filter(s => s.status === 'healthy').length}/{svcs.length} healthy
+              {svcs.filter(s => s.status === 'healthy' || s.status === 'running').length}/{svcs.length} healthy
             </span>
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -798,10 +849,12 @@ export default function InfraPage() {
                 onClick={() => setSelectedSvc(svc)}
                 onVaultUnseal={svc.id === 'vault' ? () => setVaultUnsealOpen(true) : undefined}
                 onVaultInit={svc.id === 'vault' ? () => setVaultInitOpen(true) : undefined}
-                onWorkerPurge={WORKER_IDS.includes(svc.id) ? () => handleWorkerPurge(svc.id) : undefined}
+                onWorkerPurge={WORKER_IDS.includes(svc.id) && (svc.status === 'healthy' || svc.status === 'running') ? () => handleWorkerPurge(svc.id) : undefined}
                 onViewLogs={WORKER_IDS.includes(svc.id) && svc.host === 'host_machine'
                   ? () => navigate(`/logs?worker=${svc.id.replace('worker-', '')}`)
                   : undefined}
+                onStart={WORKER_IDS.includes(svc.id) && svc.host === 'host_machine' ? () => handleWorkerStart(svc) : undefined}
+                onStop={WORKER_IDS.includes(svc.id) && svc.host === 'host_machine' ? () => handleWorkerStop(svc) : undefined}
               />
             ))}
           </div>

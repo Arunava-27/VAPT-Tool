@@ -733,6 +733,328 @@ def agent_shutdown():
     return {"ok": True, "message": "Host agent shutting down…"}
 
 
+# ─── Service Management ───────────────────────────────────────────────────────
+
+import time as _time
+
+_PROJECT_ROOT = Path(__file__).parent.parent
+_SERVICE_PID_FILE = _PROJECT_ROOT / ".service-pids.json"
+
+_ENV_EXTRAS = {
+    "DATABASE_URL": "postgresql://vapt_user:changeme123@localhost:5433/vapt_platform",
+    "REDIS_URL": "redis://:redis123@localhost:6379/0",
+    "RABBITMQ_URL": "amqp://guest:guest@localhost:5672/",
+    "CELERY_BROKER_URL": "amqp://guest:guest@localhost:5672/",
+    "CELERY_RESULT_BACKEND": "rpc://",
+    "ELASTICSEARCH_URL": "http://localhost:9200",
+    "MINIO_ENDPOINT": "localhost:9000",
+    "MINIO_ACCESS_KEY": "minioadmin",
+    "MINIO_SECRET_KEY": "minioadmin123",
+    "SECRET_KEY": "supersecretkey-changeme",
+    "JWT_SECRET_KEY": "supersecretkey-changeme",
+    "CORS_ORIGINS": "http://localhost:3000,http://localhost:5173",
+    "OLLAMA_BASE_URL": "http://localhost:11434",
+}
+
+_DOCKER_SERVICES = {
+    "postgres":      {"label": "PostgreSQL",    "container": "vapt-postgres",       "category": "data",    "icon": "database"},
+    "redis":         {"label": "Redis",          "container": "vapt-redis",          "category": "data",    "icon": "server"},
+    "rabbitmq":      {"label": "RabbitMQ",       "container": "vapt-rabbitmq",       "category": "data",    "icon": "server"},
+    "elasticsearch": {"label": "Elasticsearch",  "container": "vapt-elasticsearch",  "category": "data",    "icon": "search"},
+    "minio":         {"label": "MinIO Storage",  "container": "vapt-minio",          "category": "data",    "icon": "storage"},
+    "vault":         {"label": "Vault",          "container": "vapt-vault",          "category": "data",    "icon": "shield"},
+    "ai-engine":     {"label": "AI Engine",      "container": "vapt-ai-engine",      "category": "backend", "icon": "cpu"},
+    "ollama":        {"label": "Ollama LLM",     "container": "vapt-ollama",         "category": "backend", "icon": "cpu"},
+}
+
+_NATIVE_SERVICES = {
+    "api-gateway": {
+        "label": "API Gateway", "category": "backend", "port": 8000, "icon": "api",
+        "cmd": [
+            str(_PROJECT_ROOT / "api-gateway" / ".venv" / "Scripts" / "python.exe"),
+            "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "app"
+        ],
+        "cwd": str(_PROJECT_ROOT / "api-gateway"),
+        "log_file": str(_PROJECT_ROOT / "api-gateway" / "logs" / "api-gateway.log"),
+    },
+    "host-agent": {
+        "label": "Host Agent", "category": "backend", "port": 9999, "icon": "agent", "self": True,
+    },
+}
+
+_WORKER_CMD_BASE = ["-m", "celery", "-A", "app.tasks", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1"]
+_WORKER_SERVICES = {
+    "worker-nmap":    {"label": "NMAP Worker",    "category": "worker", "queue": "nmap",    "icon": "scan",
+                       "venv": str(_PROJECT_ROOT / "workers" / "nmap" / ".venv" / "Scripts" / "python.exe"),
+                       "cwd": str(_PROJECT_ROOT / "workers" / "nmap"),
+                       "log_file": str(_LOGS_DIR / "nmap.log")},
+    "worker-trivy":   {"label": "Trivy Worker",   "category": "worker", "queue": "trivy",   "icon": "scan",
+                       "venv": str(_PROJECT_ROOT / "workers" / "trivy" / ".venv" / "Scripts" / "python.exe"),
+                       "cwd": str(_PROJECT_ROOT / "workers" / "trivy"),
+                       "log_file": str(_LOGS_DIR / "trivy.log")},
+    "worker-prowler": {"label": "Prowler Worker", "category": "worker", "queue": "prowler", "icon": "cloud",
+                       "venv": str(_PROJECT_ROOT / "workers" / "prowler" / ".venv" / "Scripts" / "python.exe"),
+                       "cwd": str(_PROJECT_ROOT / "workers" / "prowler"),
+                       "log_file": str(_LOGS_DIR / "prowler.log")},
+}
+
+
+def _read_svc_pids() -> Dict[str, int]:
+    try:
+        if _SERVICE_PID_FILE.exists():
+            return _json.loads(_SERVICE_PID_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _write_svc_pids(pids: Dict[str, int]):
+    try:
+        _SERVICE_PID_FILE.write_text(_json.dumps(pids))
+    except Exception:
+        pass
+
+
+def _docker_container_status(container: str) -> Dict[str, Any]:
+    try:
+        r = subprocess.run(
+            ["docker", "inspect", container, "--format",
+             "{{.State.Status}}|{{.State.StartedAt}}|{{.State.FinishedAt}}"],
+            capture_output=True, text=True, timeout=5
+        )
+        if r.returncode == 0:
+            parts = r.stdout.strip().split("|")
+            state = parts[0] if parts else "unknown"
+            return {"status": "running" if state == "running" else "stopped", "state": state,
+                    "started_at": parts[1] if len(parts) > 1 else None}
+        return {"status": "stopped", "state": "not_found"}
+    except Exception as e:
+        return {"status": "unknown", "error": str(e)}
+
+
+def _native_svc_info(name: str, pid: int) -> Dict[str, Any]:
+    if pid and _process_alive(pid):
+        stats = _process_stats(pid)
+        uptime = int(_time.time() - stats.get("create_time", _time.time())) if "create_time" in stats else 0
+        return {"status": "running", "pid": pid,
+                "cpu_percent": stats.get("cpu_percent", 0),
+                "memory_mb": stats.get("memory_mb", 0),
+                "uptime_seconds": uptime}
+    return {"status": "stopped", "pid": None}
+
+
+def _get_worker_pid(queue: str) -> int:
+    """Get PID of a native worker from existing worker PID file."""
+    pids = _read_pids()
+    return pids.get(queue)
+
+
+def _write_worker_pid(queue: str, pid: int):
+    pids = _read_pids()
+    pids[queue] = pid
+    try:
+        _PID_FILE.write_text(_json.dumps(pids))
+    except Exception:
+        pass
+
+
+def _remove_worker_pid(queue: str):
+    pids = _read_pids()
+    pids.pop(queue, None)
+    try:
+        _PID_FILE.write_text(_json.dumps(pids))
+    except Exception:
+        pass
+
+
+@app.get("/services")
+def list_all_services():
+    """Return status of ALL platform services: Docker containers + native processes."""
+    result = []
+
+    # Docker services
+    for name, meta in _DOCKER_SERVICES.items():
+        ds = _docker_container_status(meta["container"])
+        result.append({
+            "id": name, "label": meta["label"], "category": meta["category"],
+            "type": "docker", "icon": meta["icon"],
+            "container": meta["container"],
+            "status": ds["status"], "state": ds.get("state"),
+            "started_at": ds.get("started_at"),
+        })
+
+    # Native services (api-gateway, host-agent)
+    svc_pids = _read_svc_pids()
+    for name, meta in _NATIVE_SERVICES.items():
+        if meta.get("self"):
+            pid = os.getpid()
+        else:
+            pid = svc_pids.get(name)
+        info = _native_svc_info(name, pid)
+        result.append({
+            "id": name, "label": meta["label"], "category": meta["category"],
+            "type": "native", "icon": meta["icon"],
+            "port": meta.get("port"),
+            "self": meta.get("self", False),
+            **info,
+        })
+
+    # Worker services
+    for name, meta in _WORKER_SERVICES.items():
+        queue = meta["queue"]
+        pid = _get_worker_pid(queue)
+        info = _native_svc_info(name, pid)
+        result.append({
+            "id": name, "label": meta["label"], "category": meta["category"],
+            "type": "worker", "icon": meta["icon"],
+            "queue": queue,
+            **info,
+        })
+
+    return result
+
+
+@app.post("/services/{name}/start")
+def start_service(name: str):
+    """Start a service by name."""
+    # Docker service
+    if name in _DOCKER_SERVICES:
+        meta = _DOCKER_SERVICES[name]
+        r = subprocess.run(["docker", "start", meta["container"]], capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return {"ok": True, "message": f"{meta['label']} started"}
+        return {"ok": False, "message": r.stderr.strip() or "Failed to start container"}
+
+    # Native service (api-gateway)
+    if name in _NATIVE_SERVICES:
+        meta = _NATIVE_SERVICES[name]
+        if meta.get("self"):
+            return {"ok": False, "message": "Cannot start host-agent from itself"}
+        svc_pids = _read_svc_pids()
+        existing_pid = svc_pids.get(name)
+        if existing_pid and _process_alive(existing_pid):
+            return {"ok": False, "message": f"{meta['label']} is already running (PID {existing_pid})"}
+        env = os.environ.copy()
+        env.update(_ENV_EXTRAS)
+        log_path = Path(meta["log_file"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        with open(log_path, "a") as log_f:
+            proc = subprocess.Popen(
+                meta["cmd"], cwd=meta["cwd"], env=env,
+                stdout=log_f, stderr=log_f,
+                creationflags=flags
+            )
+        svc_pids[name] = proc.pid
+        _write_svc_pids(svc_pids)
+        _time.sleep(1)
+        if _process_alive(proc.pid):
+            return {"ok": True, "pid": proc.pid, "message": f"{meta['label']} started (PID {proc.pid})"}
+        return {"ok": False, "message": f"{meta['label']} started but died immediately. Check logs."}
+
+    # Worker service
+    if name in _WORKER_SERVICES:
+        meta = _WORKER_SERVICES[name]
+        queue = meta["queue"]
+        existing_pid = _get_worker_pid(queue)
+        if existing_pid and _process_alive(existing_pid):
+            return {"ok": False, "message": f"{meta['label']} is already running (PID {existing_pid})"}
+        env = os.environ.copy()
+        env.update(_ENV_EXTRAS)
+        log_path = Path(meta["log_file"])
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [meta["venv"]] + _WORKER_CMD_BASE + ["-Q", queue]
+        flags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        with open(log_path, "a") as log_f:
+            proc = subprocess.Popen(cmd, cwd=meta["cwd"], env=env, stdout=log_f, stderr=log_f, creationflags=flags)
+        _write_worker_pid(queue, proc.pid)
+        _time.sleep(1)
+        if _process_alive(proc.pid):
+            return {"ok": True, "pid": proc.pid, "message": f"{meta['label']} started (PID {proc.pid})"}
+        return {"ok": False, "message": f"{meta['label']} started but died immediately. Check logs."}
+
+    return {"ok": False, "message": f"Unknown service: {name}"}
+
+
+@app.post("/services/{name}/stop")
+def stop_service(name: str):
+    """Stop a service by name."""
+    # Docker service
+    if name in _DOCKER_SERVICES:
+        meta = _DOCKER_SERVICES[name]
+        r = subprocess.run(["docker", "stop", meta["container"]], capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            return {"ok": True, "message": f"{meta['label']} stopped"}
+        return {"ok": False, "message": r.stderr.strip() or "Failed to stop container"}
+
+    # Native service (api-gateway)
+    if name in _NATIVE_SERVICES:
+        meta = _NATIVE_SERVICES[name]
+        if meta.get("self"):
+            return {"ok": False, "message": "Use the shutdown endpoint to stop host-agent"}
+        svc_pids = _read_svc_pids()
+        pid = svc_pids.get(name)
+        if not pid or not _process_alive(pid):
+            return {"ok": False, "message": f"{meta['label']} is not running"}
+        try:
+            proc = psutil.Process(pid)
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            proc.kill()
+            svc_pids.pop(name, None)
+            _write_svc_pids(svc_pids)
+            return {"ok": True, "message": f"{meta['label']} stopped"}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    # Worker service
+    if name in _WORKER_SERVICES:
+        meta = _WORKER_SERVICES[name]
+        queue = meta["queue"]
+        pid = _get_worker_pid(queue)
+        if not pid or not _process_alive(pid):
+            return {"ok": False, "message": f"{meta['label']} is not running"}
+        try:
+            proc = psutil.Process(pid)
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            proc.kill()
+            _remove_worker_pid(queue)
+            return {"ok": True, "message": f"{meta['label']} stopped"}
+        except Exception as e:
+            return {"ok": False, "message": str(e)}
+
+    return {"ok": False, "message": f"Unknown service: {name}"}
+
+
+@app.get("/services/{name}/logs")
+def get_service_logs(name: str, lines: int = 150):
+    """Get recent log lines for a service."""
+    log_file = None
+    if name in _NATIVE_SERVICES and not _NATIVE_SERVICES[name].get("self"):
+        log_file = Path(_NATIVE_SERVICES[name]["log_file"])
+    elif name in _WORKER_SERVICES:
+        log_file = Path(_WORKER_SERVICES[name]["log_file"])
+
+    if not log_file:
+        if name in _DOCKER_SERVICES:
+            container = _DOCKER_SERVICES[name]["container"]
+            r = subprocess.run(["docker", "logs", "--tail", str(lines), container],
+                               capture_output=True, text=True, timeout=10)
+            combined = (r.stdout + r.stderr).splitlines()
+            return {"lines": [{"text": l, "stream": "stdout"} for l in combined if l.strip()]}
+        return {"lines": [], "error": "No log file for this service"}
+
+    raw_lines = _tail_log(log_file, lines)
+    return {"lines": [{"text": l, "stream": "stdout"} for l in raw_lines]}
+
+
 # ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

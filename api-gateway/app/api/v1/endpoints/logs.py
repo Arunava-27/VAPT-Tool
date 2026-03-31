@@ -2,6 +2,7 @@
 Docker container logs endpoints.
 - On Linux/Docker: uses Unix socket at /var/run/docker.sock
 - On Windows (native): uses docker CLI subprocess (Docker Desktop must be running)
+- Native-only containers (api-gateway, frontend) are excluded from the list.
 """
 import asyncio
 import json
@@ -35,7 +36,7 @@ CONTAINER_CATEGORIES = {
     "backend": ["vapt-api-gateway", "vapt-orchestrator", "vapt-ai-engine", "vapt-ollama"],
     "workers": ["vapt-worker-nmap", "vapt-worker-zap", "vapt-worker-nikto", "vapt-worker-metasploit", "vapt-worker-sqlmap"],
     "frontend": ["vapt-frontend"],
-    "init": ["vapt-data-init", "vapt-vault-init"],
+    "init": ["vapt-data-init", "vapt-vault-init", "vapt-ollama-init"],
 }
 
 
@@ -45,6 +46,8 @@ def _get_category(name: str) -> str:
             return cat
     if "worker" in name:
         return "workers"
+    if name.endswith("-init") or "init" in name.split("-"):
+        return "init"
     return "other"
 
 
@@ -64,7 +67,6 @@ async def _docker_get(path: str, **kwargs) -> httpx.Response:
 async def _docker_get_win(path: str, params: dict = None, **_) -> "httpx.Response":
     """Windows-only: run docker CLI in a thread (avoids asyncio subprocess issues on Windows)."""
     import json as _json
-    import concurrent.futures
 
     loop = asyncio.get_event_loop()
 
@@ -94,20 +96,23 @@ async def _docker_get_win(path: str, params: dict = None, **_) -> "httpx.Respons
     if m:
         cid = m.group(1)
         tail = str((params or {}).get("tail", "300"))
+        # Run docker logs capturing stdout and stderr separately so we can tag each line correctly.
+        # With --timestamps both streams have ISO timestamps we can sort by.
         cmd = ["docker", "logs", "--tail", tail, "--timestamps", cid]
-        stdout, stderr, _ = await loop.run_in_executor(None, _run_docker, cmd)
-        combined = (stdout + stderr).encode("utf-8", errors="replace")
-        return _FakeResponse(200, None, raw=combined)
+        stdout_text, stderr_text, _ = await loop.run_in_executor(None, _run_docker, cmd)
+        lines = _merge_docker_log_streams(stdout_text, stderr_text)
+        return _FakeResponse(200, None, lines=lines)
 
     raise RuntimeError(f"_docker_get_win: unhandled path {path}")
 
 
 class _FakeResponse:
     """Minimal mock to satisfy callers expecting httpx.Response interface."""
-    def __init__(self, status_code: int, data, raw: bytes = b""):
+    def __init__(self, status_code: int, data, raw: bytes = b"", lines=None):
         self.status_code = status_code
         self._data = data
         self.content = raw
+        self._lines = lines  # pre-parsed lines (bypasses _parse_docker_log_stream)
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -115,6 +120,20 @@ class _FakeResponse:
 
     def json(self):
         return self._data
+
+
+def _merge_docker_log_streams(stdout_text: str, stderr_text: str) -> List[Dict[str, str]]:
+    """Tag docker log lines by stream, sort by ISO timestamp, return merged list."""
+    ts_re = re.compile(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\.\d]*Z?)\s')
+    lines: List[Dict[str, str]] = []
+    for text, stream in ((stdout_text, "stdout"), (stderr_text, "stderr")):
+        for line in text.splitlines():
+            clean = re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', line.strip())
+            if clean:
+                m = ts_re.match(clean)
+                lines.append({"text": clean, "stream": stream, "_ts": m.group(1) if m else ""})
+    lines.sort(key=lambda x: x["_ts"])
+    return [{"text": l["text"], "stream": l["stream"]} for l in lines]
 
 
 def _parse_docker_log_stream(raw: bytes) -> List[Dict[str, str]]:
@@ -159,10 +178,16 @@ async def list_containers(
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Docker unavailable: {exc}")
 
+    # Services that run natively on the host — their Docker containers are always exited
+    # and not useful to show in the container logs list.
+    NATIVE_ONLY = {"vapt-api-gateway", "vapt-frontend"}
+
     containers = []
     for c in data:
         names = c.get("Names", [])
         name = names[0].lstrip("/") if names else c["Id"][:12]
+        if name in NATIVE_ONLY:
+            continue
         containers.append({
             "id": c["Id"][:12],
             "full_id": c["Id"],
@@ -202,7 +227,11 @@ async def get_logs(
         if resp.status_code == 404:
             raise HTTPException(status_code=404, detail="Container not found")
         resp.raise_for_status()
-        lines = _parse_docker_log_stream(resp.content)
+        # Windows: _FakeResponse may have pre-parsed lines (stdout/stderr properly tagged)
+        if hasattr(resp, '_lines') and resp._lines is not None:
+            lines = resp._lines
+        else:
+            lines = _parse_docker_log_stream(resp.content)
     except HTTPException:
         raise
     except Exception as exc:

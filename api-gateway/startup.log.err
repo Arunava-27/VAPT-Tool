@@ -1,0 +1,161 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\Arunava\\Desktop\\projects\\personal\\VAPT-Tool\\api-gateway\\app']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [6924] using WatchFiles
+2026-03-31 18:20:32,849 - app.main - INFO - Rate limiting enabled
+2026-03-31 18:20:32,850 - app.main - INFO - Multi-tenant mode enabled
+INFO:     Started server process [13856]
+INFO:     Waiting for application startup.
+2026-03-31 18:20:32,914 - app.main - INFO - Starting VAPT Platform API Gateway...
+2026-03-31 18:20:32,914 - app.main - INFO - Environment: development
+2026-03-31 18:20:32,915 - app.main - INFO - Debug mode: False
+2026-03-31 18:20:32,915 - app.main - INFO - Multi-tenant: True
+2026-03-31 18:20:32,915 - app.main - INFO - Rate limiting: True
+2026-03-31 18:20:32,931 - app.main - INFO - Database initialized successfully
+2026-03-31 18:20:32,932 - app.main - INFO - API Gateway ready!
+INFO:     Application startup complete.
+2026-03-31 18:22:13,836 - httpx - INFO - HTTP Request: GET http://localhost:9999/health "HTTP/1.1 200 OK"
+2026-03-31 18:22:14,825 - httpx - INFO - HTTP Request: GET http://localhost:9999/health "HTTP/1.1 200 OK"
+2026-03-31 18:23:01,433 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:23:01,434 - httpx - INFO - HTTP Request: GET http://localhost:9999/health "HTTP/1.1 200 OK"
+2026-03-31 18:23:02,542 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:23:02,782 - httpx - INFO - HTTP Request: GET http://localhost:9999/health "HTTP/1.1 200 OK"
+2026-03-31 18:23:03,711 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:24:54,137 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+WARNING:  WatchFiles detected changes in 'app\api\v1\endpoints\ws.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-03-31 18:30:31,251 - app.main - INFO - Shutting down API Gateway...
+INFO:     Application shutdown complete.
+INFO:     Finished server process [13856]
+WARNING:  WatchFiles detected changes in 'app\api\v1\endpoints\ws.py'. Reloading...
+2026-03-31 18:30:33,021 - app.main - INFO - Rate limiting enabled
+2026-03-31 18:30:33,021 - app.main - INFO - Multi-tenant mode enabled
+INFO:     Started server process [10432]
+INFO:     Waiting for application startup.
+2026-03-31 18:30:33,085 - app.main - INFO - Starting VAPT Platform API Gateway...
+2026-03-31 18:30:33,085 - app.main - INFO - Environment: development
+2026-03-31 18:30:33,085 - app.main - INFO - Debug mode: False
+2026-03-31 18:30:33,086 - app.main - INFO - Multi-tenant: True
+2026-03-31 18:30:33,086 - app.main - INFO - Rate limiting: True
+2026-03-31 18:30:33,102 - app.main - INFO - Database initialized successfully
+2026-03-31 18:30:33,103 - app.main - INFO - API Gateway ready!
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-03-31 18:30:33,212 - app.main - INFO - Shutting down API Gateway...
+INFO:     Application shutdown complete.
+INFO:     Finished server process [10432]
+2026-03-31 18:30:34,815 - app.main - INFO - Rate limiting enabled
+2026-03-31 18:30:34,815 - app.main - INFO - Multi-tenant mode enabled
+INFO:     Started server process [7616]
+INFO:     Waiting for application startup.
+2026-03-31 18:30:34,879 - app.main - INFO - Starting VAPT Platform API Gateway...
+2026-03-31 18:30:34,879 - app.main - INFO - Environment: development
+2026-03-31 18:30:34,880 - app.main - INFO - Debug mode: False
+2026-03-31 18:30:34,880 - app.main - INFO - Multi-tenant: True
+2026-03-31 18:30:34,880 - app.main - INFO - Rate limiting: True
+2026-03-31 18:30:34,898 - app.main - INFO - Database initialized successfully
+2026-03-31 18:30:34,898 - app.main - INFO - API Gateway ready!
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\api\v1\endpoints\network.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for connections to close. (CTRL+C to force quit)
+2026-03-31 18:35:10,678 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+INFO:     Waiting for application shutdown.
+2026-03-31 18:35:10,718 - app.main - INFO - Shutting down API Gateway...
+INFO:     Application shutdown complete.
+INFO:     Finished server process [7616]
+WARNING:  WatchFiles detected changes in 'app\api\v1\endpoints\network.py'. Reloading...
+2026-03-31 18:35:12,547 - app.main - INFO - Rate limiting enabled
+2026-03-31 18:35:12,548 - app.main - INFO - Multi-tenant mode enabled
+INFO:     Started server process [9168]
+INFO:     Waiting for application startup.
+2026-03-31 18:35:12,617 - app.main - INFO - Starting VAPT Platform API Gateway...
+2026-03-31 18:35:12,618 - app.main - INFO - Environment: development
+2026-03-31 18:35:12,618 - app.main - INFO - Debug mode: False
+2026-03-31 18:35:12,618 - app.main - INFO - Multi-tenant: True
+2026-03-31 18:35:12,619 - app.main - INFO - Rate limiting: True
+2026-03-31 18:35:12,637 - app.main - INFO - Database initialized successfully
+2026-03-31 18:35:12,637 - app.main - INFO - API Gateway ready!
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-03-31 18:35:12,750 - app.main - INFO - Shutting down API Gateway...
+INFO:     Application shutdown complete.
+INFO:     Finished server process [9168]
+2026-03-31 18:35:14,416 - app.main - INFO - Rate limiting enabled
+2026-03-31 18:35:14,416 - app.main - INFO - Multi-tenant mode enabled
+INFO:     Started server process [14872]
+INFO:     Waiting for application startup.
+2026-03-31 18:35:14,483 - app.main - INFO - Starting VAPT Platform API Gateway...
+2026-03-31 18:35:14,483 - app.main - INFO - Environment: development
+2026-03-31 18:35:14,483 - app.main - INFO - Debug mode: False
+2026-03-31 18:35:14,484 - app.main - INFO - Multi-tenant: True
+2026-03-31 18:35:14,484 - app.main - INFO - Rate limiting: True
+2026-03-31 18:35:14,502 - app.main - INFO - Database initialized successfully
+2026-03-31 18:35:14,502 - app.main - INFO - API Gateway ready!
+INFO:     Application startup complete.
+2026-03-31 18:35:41,971 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:35:42,227 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:35:42,227 - httpx - INFO - HTTP Request: GET http://localhost:9999/health "HTTP/1.1 200 OK"
+2026-03-31 18:38:00,275 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:38:00,537 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:38:00,538 - httpx - INFO - HTTP Request: GET http://localhost:9999/health "HTTP/1.1 200 OK"
+2026-03-31 18:44:35,229 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:44:35,491 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+2026-03-31 18:44:35,492 - httpx - INFO - HTTP Request: GET http://localhost:9999/health "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:18638 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw" [accepted]
+INFO:     connection open
+2026-03-31 18:51:57,854 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=vEthernet (WSL) total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18640 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=vEthernet%20(WSL)" [accepted]
+INFO:     connection open
+2026-03-31 18:52:06,191 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=vEthernet (WSL) total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18643 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet" [accepted]
+INFO:     connection open
+INFO:     connection closed
+2026-03-31 18:54:00,920 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet total=234
+2026-03-31 18:54:24,990 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:18669 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw" [accepted]
+INFO:     connection open
+2026-03-31 18:54:30,303 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=vEthernet (WSL) total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18671 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet%202" [accepted]
+INFO:     connection open
+INFO:     connection closed
+2026-03-31 18:54:45,690 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet 2 total=0
+2026-03-31 18:55:17,449 - httpx - INFO - HTTP Request: POST http://localhost:9999/discover "HTTP/1.1 200 OK"
+2026-03-31 18:55:44,004 - httpx - INFO - HTTP Request: GET http://localhost:9999/interfaces "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:18695 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw" [accepted]
+INFO:     connection open
+2026-03-31 18:55:52,154 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=vEthernet (WSL) total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18698 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet" [accepted]
+INFO:     connection open
+INFO:     connection closed
+2026-03-31 18:56:10,238 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet total=5
+INFO:     127.0.0.1:18701 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet" [accepted]
+INFO:     connection open
+INFO:     connection closed
+2026-03-31 18:56:21,792 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet total=18
+INFO:     127.0.0.1:18703 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=vEthernet%20(WSL)&filter=192.168.90.84" [accepted]
+INFO:     connection open
+2026-03-31 18:56:22,118 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=vEthernet (WSL) total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18705 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet&filter=192.168.90.84" [accepted]
+INFO:     connection open
+2026-03-31 18:56:28,895 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18707 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet&filter=192.168.90.84" [accepted]
+INFO:     connection open
+2026-03-31 18:56:43,316 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18709 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet&filter=192.168.90.84" [accepted]
+INFO:     connection open
+2026-03-31 18:56:48,214 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet total=0
+INFO:     connection closed
+INFO:     127.0.0.1:18712 - "WebSocket /api/v1/ws/traffic?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmNTkyY2IwNS1iOWUwLTQ5OTAtYTc5Zi0wZjBmMmYyY2ZjYzMiLCJlbWFpbCI6ImFkbWluQHZhcHQtcGxhdGZvcm0ubG9jYWwiLCJ0ZW5hbnRfaWQiOiJiM2U5OGQyNy1hY2I2LTQ0OGUtOGRmZS1hN2RlODQ5ZmY3MDYiLCJleHAiOjE3NzQ5NjM5MDMsImlhdCI6MTc3NDk2MDMwMywidHlwZSI6ImFjY2VzcyJ9.FgwMGSVKt4apc9CYv87DaeW6XsWCiyJtoKcGMWNloLw&iface=Ethernet" [accepted]
+INFO:     connection open
+INFO:     connection closed
+2026-03-31 18:57:30,331 - app.api.v1.endpoints.ws - INFO - Traffic WS closed: iface=Ethernet total=40

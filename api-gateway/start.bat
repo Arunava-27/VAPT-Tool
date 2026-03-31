@@ -40,7 +40,11 @@ if errorlevel 1 (
 :: ── Step 4: Create superuser if needed ──────────────────────────────────────
 .venv\Scripts\python.exe init_db.py 2>nul
 
-:: ── Step 5: Start uvicorn ────────────────────────────────────────────────────
+:: ── Step 5: Register PID so host-agent service panel shows correct status ────
+for /f "tokens=2" %%i in ('tasklist /fi "imagename eq python.exe" /fo list ^| findstr "PID:"') do set LAST_PID=%%i
+python -c "import os,json,pathlib; f=pathlib.Path(r'%~dp0..\.service-pids.json'); d=json.loads(f.read_text()) if f.exists() else {}; d['api-gateway']=os.getpid(); f.write_text(json.dumps(d))" 2>nul
+
+:: ── Step 6: Start uvicorn ────────────────────────────────────────────────────
 echo.
 echo [*] Starting API Gateway on http://localhost:8000
 echo [*] Press Ctrl+C to stop

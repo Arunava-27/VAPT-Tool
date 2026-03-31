@@ -5,7 +5,10 @@ Celery workers, AI engine, and Vault.
 """
 
 import asyncio
+import json
 import re
+import subprocess
+import sys as _sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -35,8 +38,37 @@ def _rmq_creds():
     return "guest", "guest", "rabbitmq"
 
 # ---------------------------------------------------------------------------
-# Individual probes
+# Docker fallback helpers (for ports not accessible from Windows host)
 # ---------------------------------------------------------------------------
+
+async def _docker_inspect_health(container: str) -> Optional[str]:
+    """Return Docker health status string via `docker inspect` subprocess."""
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "inspect", "--format", "{{.State.Health.Status}}", container],
+            capture_output=True, text=True, timeout=6
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except Exception:
+        return None
+
+
+async def _docker_exec_json(container: str, cmd: List[str]) -> Optional[Dict[str, Any]]:
+    """Run a command inside a container and parse stdout as JSON."""
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "exec", container] + cmd,
+            capture_output=True, text=True, timeout=8
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
 
 async def probe_postgres(db: Session) -> Dict[str, Any]:
     t = time.monotonic()
@@ -78,8 +110,9 @@ async def probe_rabbitmq() -> Dict[str, Any]:
 
 async def probe_elasticsearch() -> Dict[str, Any]:
     t = time.monotonic()
+    # Try direct HTTP first, fall back to docker exec (Windows port binding bug)
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=4) as client:
             res = await client.get(f"{settings.ELASTICSEARCH_URL}/_cluster/health")
             data = res.json()
             return {
@@ -88,28 +121,69 @@ async def probe_elasticsearch() -> Dict[str, Any]:
                 "cluster_status": data.get("status", "?"),
                 "nodes": data.get("number_of_nodes", "?"),
             }
-    except Exception as exc:
-        return {"status": "unhealthy", "error": str(exc)}
+    except Exception:
+        pass
+
+    # Fallback: docker exec (handles Windows Docker Desktop port forwarding bug)
+    data = await _docker_exec_json(
+        "vapt-elasticsearch",
+        ["curl", "-sf", "http://localhost:9200/_cluster/health"]
+    )
+    if data:
+        return {
+            "status": "healthy" if data.get("status") in ("green", "yellow") else "unhealthy",
+            "latency_ms": round((time.monotonic() - t) * 1000, 1),
+            "cluster_status": data.get("status", "?"),
+            "nodes": data.get("number_of_nodes", "?"),
+        }
+
+    # Last resort: docker inspect health status
+    health = await _docker_inspect_health("vapt-elasticsearch")
+    if health == "healthy":
+        return {"status": "healthy", "latency_ms": round((time.monotonic() - t) * 1000, 1), "cluster_status": "green"}
+    return {"status": "unhealthy", "error": "Elasticsearch unreachable from host and container reports unhealthy"}
 
 
 async def probe_minio() -> Dict[str, Any]:
     t = time.monotonic()
+    scheme = "https" if settings.MINIO_SECURE else "http"
+    # Try direct HTTP first
     try:
-        scheme = "https" if settings.MINIO_SECURE else "http"
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=4) as client:
             res = await client.get(f"{scheme}://{settings.MINIO_ENDPOINT}/minio/health/live")
             return {
                 "status": "healthy" if res.status_code == 200 else "unhealthy",
                 "latency_ms": round((time.monotonic() - t) * 1000, 1),
             }
-    except Exception as exc:
-        return {"status": "unhealthy", "error": str(exc)}
+    except Exception:
+        pass
+
+    # Fallback: docker exec
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", "exec", "vapt-minio", "curl", "-sf",
+             "http://localhost:9000/minio/health/live"],
+            capture_output=True, text=True, timeout=8
+        )
+        if result.returncode == 0:
+            return {"status": "healthy", "latency_ms": round((time.monotonic() - t) * 1000, 1)}
+    except Exception:
+        pass
+
+    # Last resort: docker inspect
+    health = await _docker_inspect_health("vapt-minio")
+    if health == "healthy":
+        return {"status": "healthy", "latency_ms": round((time.monotonic() - t) * 1000, 1)}
+    return {"status": "unhealthy", "error": "MinIO unreachable from host"}
+
 
 
 async def probe_ai_engine() -> Dict[str, Any]:
     t = time.monotonic()
+    # Use localhost on Windows (native host), Docker service name on Linux (in-container)
+    ai_url = "http://localhost:8001" if _sys.platform == "win32" else getattr(settings, "AI_ENGINE_URL", "http://ai-engine:8001")
     try:
-        ai_url = getattr(settings, "AI_ENGINE_URL", "http://ai-engine:8001")
         async with httpx.AsyncClient(timeout=5) as client:
             res = await client.get(f"{ai_url}/info")
             data = res.json() if res.status_code == 200 else {}
@@ -124,7 +198,25 @@ async def probe_ai_engine() -> Dict[str, Any]:
         return {"status": "unhealthy", "error": str(exc)}
 
 
-import sys as _sys
+async def probe_ollama() -> Dict[str, Any]:
+    t = time.monotonic()
+    ollama_url = "http://localhost:11434" if _sys.platform == "win32" else getattr(settings, "OLLAMA_BASE_URL", "http://ollama:11434")
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(f"{ollama_url}/api/tags")
+            data = res.json() if res.status_code == 200 else {}
+            models = [m.get("name", "") for m in data.get("models", [])]
+            desc = f"{len(models)} model{'s' if len(models) != 1 else ''} loaded" if models else "No models loaded"
+            return {
+                "status": "healthy" if res.status_code == 200 else "unhealthy",
+                "latency_ms": round((time.monotonic() - t) * 1000, 1),
+                "description": desc,
+                "models_loaded": len(models),
+            }
+    except Exception as exc:
+        return {"status": "unhealthy", "error": str(exc)}
+
+
 _HOST_AGENT_URL = (
     "http://localhost:9999" if _sys.platform == "win32"
     else "http://host.docker.internal:9999"
@@ -145,7 +237,10 @@ async def _fetch_host_agent_workers() -> Dict[str, Any]:
 
 async def probe_celery_workers() -> List[Dict[str, Any]]:
     """Check worker health via RabbitMQ Management API, enriched with host-agent native details."""
-    known_queues = ["nmap", "zap", "trivy", "prowler", "metasploit"]
+    # Workers that are core (always expected) vs optional (may not be installed)
+    core_queues = ["nmap", "trivy", "prowler"]
+    optional_queues = ["zap", "metasploit"]  # not installed by default
+    known_queues = core_queues + optional_queues
     results = []
 
     # Fetch RabbitMQ queue info and host-agent native details in parallel
@@ -174,10 +269,17 @@ async def probe_celery_workers() -> List[Dict[str, Any]]:
         stats = native.get("stats", {})
         create_time = stats.get("create_time")
         uptime_s = round(_time.time() - create_time) if create_time else None
+        is_optional = name in optional_queues
 
-        if q is None:
-            worker_status = "running" if alive else "unreachable"
-            consumers = 1 if alive else 0
+        if q is None and not alive:
+            # Optional workers (ZAP, Metasploit) that aren't installed show as not_started
+            # Core workers that are missing show as unhealthy
+            worker_status = "not_started" if is_optional else "unhealthy"
+            consumers = 0
+            messages = 0
+        elif q is None:
+            worker_status = "running"
+            consumers = 1
             messages = 0
         else:
             consumers = q.get("consumers", 0)
@@ -209,6 +311,8 @@ async def probe_celery_workers() -> List[Dict[str, Any]]:
                 entry["threads"] = stats.get("threads", 1)
             entry["label"] = native.get("label", name)
             entry["description"] = native.get("description", "")
+        elif worker_status == "not_started":
+            entry["error"] = "Optional worker not installed — install to enable"
         elif not alive and consumers == 0:
             entry["error"] = "No consumers — worker may be down"
 
@@ -219,8 +323,9 @@ async def probe_celery_workers() -> List[Dict[str, Any]]:
 
 async def probe_vault() -> Dict[str, Any]:
     t = time.monotonic()
+    # On Windows, vault is accessible via localhost:8200 (port is mapped in docker-compose)
+    vault_url = "http://localhost:8200" if _sys.platform == "win32" else getattr(settings, "VAULT_URL", "http://vault:8200")
     try:
-        vault_url = getattr(settings, "VAULT_URL", "http://vault:8200")
         async with httpx.AsyncClient(timeout=5) as client:
             res = await client.get(f"{vault_url}/v1/sys/health")
             data = res.json() if res.status_code in (200, 429, 472, 473, 501, 503) else {}
@@ -280,6 +385,7 @@ async def services_health(
         es_result,
         minio_result,
         ai_result,
+        ollama_result,
         vault_result,
         workers_result,
     ) = await asyncio.gather(
@@ -289,6 +395,7 @@ async def services_health(
         probe_elasticsearch(),
         probe_minio(),
         probe_ai_engine(),
+        probe_ollama(),
         probe_vault(),
         probe_celery_workers(),
         return_exceptions=False,
@@ -299,8 +406,9 @@ async def services_health(
         {"id": "redis",          "name": "Redis",            "category": "cache",    **redis_result},
         {"id": "rabbitmq",       "name": "RabbitMQ",         "category": "queue",    **rmq_result},
         {"id": "elasticsearch",  "name": "Elasticsearch",    "category": "search",   **es_result},
-        {"id": "minio",          "name": "MinIO",            "category": "storage",  **minio_result},
+        {"id": "minio",          "name": "MinIO Storage",    "category": "storage",  **minio_result},
         {"id": "ai-engine",      "name": "AI Engine",        "category": "backend",  **ai_result},
+        {"id": "ollama",         "name": "Ollama LLM",       "category": "backend",  **ollama_result},
         {"id": "vault",          "name": "HashiCorp Vault",  "category": "secrets",  **vault_result},
     ]
 
@@ -825,6 +933,7 @@ async def shutdown_host_agent(
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}")
 
+@router.get("/workers")
 async def list_native_workers(
     _: User = Depends(get_current_active_user),
 ) -> List[Dict[str, Any]]:
@@ -845,7 +954,7 @@ async def list_native_workers(
 async def get_native_worker_logs(
     name: str,
     tail: int = 200,
-    stream: str = "stderr",
+    stream: str = "all",
     _: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     """Return recent log lines for a native worker via host-agent proxy."""

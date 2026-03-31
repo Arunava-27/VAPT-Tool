@@ -201,10 +201,13 @@ export default function LogsPage() {
     return () => { if (workerIntervalRef.current) clearInterval(workerIntervalRef.current) }
   }, [workerAutoRefresh, selectedWorker, workerTail, workerStream, activeTab, fetchWorkerLogs, fetchNativeWorkers])
 
+  // Services that run natively — their Docker containers are always exited and not useful here
+  const NATIVE_ONLY_CONTAINERS = new Set(['vapt-api-gateway', 'vapt-frontend'])
+
   useEffect(() => {
     setContainersLoading(true)
     listContainers()
-      .then(r => setContainers(r.data))
+      .then(r => setContainers(r.data.filter(c => !NATIVE_ONLY_CONTAINERS.has(c.name))))
       .catch(e => setContainersError(e?.response?.data?.detail ?? 'Failed to load containers'))
       .finally(() => setContainersLoading(false))
   }, [])
@@ -285,24 +288,28 @@ export default function LogsPage() {
 
   // ── status dot ────────────────────────────────────────────────────────────
 
-  function StatusDot({ state }: { state: string }) {
+  function StatusDot({ state, category }: { state: string; category?: string }) {
     const color =
-      state === 'running' ? 'bg-emerald-400' :
-      state === 'exited'  ? 'bg-rose-400' :
-                            'bg-amber-400'
+      state === 'running'  ? 'bg-emerald-400' :
+      state === 'exited' && category === 'init' ? 'bg-slate-500' :
+      state === 'exited'   ? 'bg-slate-400' :
+                             'bg-amber-400'
     return <span className={clsx('w-2 h-2 rounded-full flex-shrink-0', color)} />
   }
 
   // ── state badge ───────────────────────────────────────────────────────────
 
-  function StateBadge({ state }: { state: string }) {
+  function StateBadge({ state, category }: { state: string; category?: string }) {
+    const isInit = category === 'init'
+    const label = state === 'exited' && isInit ? 'completed' : state
     const cls =
       state === 'running' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' :
-      state === 'exited'  ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' :
+      state === 'exited' && isInit ? 'bg-slate-700/40 text-slate-500 border-slate-600/30' :
+      state === 'exited'  ? 'bg-slate-600/30 text-slate-400 border-slate-500/30' :
                             'bg-amber-500/20 text-amber-400 border-amber-500/30'
     return (
       <span className={clsx('px-2 py-0.5 rounded text-xs font-mono border', cls)}>
-        {state}
+        {label}
       </span>
     )
   }
@@ -713,7 +720,7 @@ export default function LogsPage() {
                       : 'border-l-2 border-transparent text-slate-400 hover:text-slate-200 hover:bg-cyber-border'
                   )}
                 >
-                  <StatusDot state={c.state} />
+                  <StatusDot state={c.state} category={c.category} />
                   <span className="truncate font-mono">
                     {c.name.replace(/^vapt-/, '')}
                   </span>
@@ -740,7 +747,7 @@ export default function LogsPage() {
                   <h3 className="text-sm font-semibold text-white truncate font-mono">
                     {selected.name}
                   </h3>
-                  <StateBadge state={selected.state} />
+                  <StateBadge state={selected.state} category={selected.category} />
                 </div>
 
                 {/* Tail selector */}

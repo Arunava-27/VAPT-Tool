@@ -2,20 +2,24 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   Laptop, Smartphone, Router, Server, Wifi, HelpCircle, Printer, Camera,
   RefreshCw, Search, Trash2, Zap, X, Network, Upload,
-  AlertTriangle, CheckCircle, XCircle, Cpu, Shield, Monitor,
+  AlertTriangle, CheckCircle, XCircle, Cpu, Shield, Monitor, GitBranch,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
   getNodes, discoverNetwork, scanNode, deleteNode, getScan,
   getHostInterfaces, cancelScan, getHostAgentStatus,
   getNodeVulnerabilities, getAllVulnerabilities, updateVulnStatus,
+  getTopology, discoveryWsUrl,
 } from '../../api/network'
 import apiClient from '../../api/client'
+import { store } from '../../store'
 import type {
   NetworkNode, NetworkScan, HostInterfacesResponse, HostAgentStatus,
-  HostVulnerability,
+  HostVulnerability, TopologyData,
 } from '../../api/network'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
+import TopologyMap from '../../components/network/TopologyMap'
+import TrafficMonitor from '../../components/network/TrafficMonitor'
 
 // suppress unused import lint warnings
 void Cpu; void Monitor
@@ -328,7 +332,11 @@ export default function NetworkPage() {
   const [hostIfaces, setHostIfaces] = useState<HostInterfacesResponse | null>(null)
   const [hostAgent, setHostAgent] = useState<HostAgentStatus | null>(null)
   const [ifacesLoading, setIfacesLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'assets' | 'vulnerabilities'>('assets')
+  const [activeTab, setActiveTab] = useState<'assets' | 'vulnerabilities' | 'topology'>('assets')
+  // Topology state
+  const [topology, setTopology]         = useState<TopologyData | null>(null)
+  const [topoLoading, setTopoLoading]   = useState(false)
+  const [topoActiveIps, setTopoActiveIps] = useState<Set<string>>(new Set())
   const [deviceFilter, setDeviceFilter] = useState<FilterType>('all')
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
   const [search, setSearch] = useState('')
@@ -440,6 +448,13 @@ export default function NetworkPage() {
     catch { setHostAgent({ available: false, platform: null, hostname: null }) }
   }, [])
 
+  const fetchTopology = useCallback(async () => {
+    setTopoLoading(true)
+    try { const res = await getTopology(); setTopology(res.data) }
+    catch { /* silently fail */ }
+    finally { setTopoLoading(false) }
+  }, [])
+
   const fetchNodeVulns = useCallback(async (nodeId: string) => {
     setLoadingNodeVulns(true)
     setNodeVulns([])
@@ -451,6 +466,11 @@ export default function NetworkPage() {
   useEffect(() => {
     fetchNodes(); fetchAllVulns(); fetchHostInterfaces(); fetchHostAgentStatus()
   }, [fetchNodes, fetchAllVulns, fetchHostInterfaces, fetchHostAgentStatus])
+
+  // Fetch topology when topology tab is opened
+  useEffect(() => {
+    if (activeTab === 'topology') fetchTopology()
+  }, [activeTab, fetchTopology])
 
   const selectedNodeId = selectedNode?.id
   useEffect(() => {
@@ -490,35 +510,73 @@ export default function NetworkPage() {
     }
     setIsDiscovering(true)
     setDiscoveryResult(null)
-    try {
-      const prevNodes = nodes // snapshot before discovery
-      const res = await discoverNetwork(range)
-      setCustomRange('')
-      if (res.data.status === 'completed') {
-        const nodesFound = res.data.nodes_found ?? 0
-        const scanRange = range ?? 'network'
-        let newCount = 0
-        try {
-          const refreshed = await getNodes()
-          const prevIps = new Set(prevNodes.map(n => n.ip_address))
-          const freshNodes = refreshed.data
-          const newIps = freshNodes
-            .filter(n => !prevIps.has(n.ip_address))
-            .map(n => n.ip_address)
-          newCount = newIps.length
+    const prevNodes = nodes
+
+    // ── WebSocket streaming discovery ─────────────────────────────────────────
+    const token = store.getState().auth.accessToken ?? ''
+    const wsUrl = discoveryWsUrl(token, range)
+    const ws = new WebSocket(wsUrl)
+    let nodesFound = 0
+    const newIps = new Set<string>()
+    const prevIps = new Set(prevNodes.map(n => n.ip_address))
+    const liveNodes: NetworkNode[] = [...prevNodes]
+
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data as string)
+        if (msg.type === 'node' && msg.node) {
+          const n = msg.node as NetworkNode
+          nodesFound++
+          if (!prevIps.has(n.ip_address)) {
+            newIps.add(n.ip_address)
+            liveNodes.push(n)
+          }
+          setNodes([...liveNodes])
+        } else if (msg.type === 'done') {
+          setDiscoveryResult({ nodesFound, range: range ?? 'network', newNodes: newIps.size })
           setRecentlyFoundIps(new Set(newIps))
-          setNodes(freshNodes)
           setTimeout(() => setRecentlyFoundIps(new Set()), 30000)
-        } catch {}
-        setDiscoveryResult({ nodesFound, range: scanRange, newNodes: newCount })
-        toast.success(`Discovery complete — ${nodesFound} node(s) found`)
-      } else {
-        const scanRes = await getScan(res.data.scan_id)
-        setActiveScan(scanRes.data)
-        toast.success('Network discovery started')
-      }
-    } catch (err) { toast.error('Failed to start discovery'); console.error(err) }
-    finally { setIsDiscovering(false) }
+          toast.success(`Discovery complete — ${nodesFound} node(s) found`)
+          setIsDiscovering(false)
+          fetchAllVulns()
+        } else if (msg.type === 'error') {
+          // Fall back to REST discovery on WS error
+          toast.error(msg.message ?? 'Discovery error')
+          setIsDiscovering(false)
+        }
+      } catch { /* ignore parse errors */ }
+    }
+
+    ws.onerror = async () => {
+      // WS unavailable — fall back to REST endpoint
+      ws.close()
+      try {
+        const res = await discoverNetwork(range)
+        setCustomRange('')
+        if (res.data.status === 'completed') {
+          const count = res.data.nodes_found ?? 0
+          try {
+            const refreshed = await getNodes()
+            const freshNodes = refreshed.data
+            const newIpsFallback = freshNodes.filter(n => !prevIps.has(n.ip_address)).map(n => n.ip_address)
+            setRecentlyFoundIps(new Set(newIpsFallback))
+            setNodes(freshNodes)
+            setTimeout(() => setRecentlyFoundIps(new Set()), 30000)
+            setDiscoveryResult({ nodesFound: count, range: range ?? 'network', newNodes: newIpsFallback.length })
+          } catch { /* ignore */ }
+          toast.success(`Discovery complete — ${count} node(s) found`)
+        } else {
+          const scanRes = await getScan(res.data.scan_id)
+          setActiveScan(scanRes.data)
+          toast.success('Network discovery started')
+        }
+      } catch (err) { toast.error('Failed to start discovery'); console.error(err) }
+      finally { setIsDiscovering(false) }
+    }
+
+    ws.onclose = (ev) => {
+      if (ev.code !== 1000 && isDiscovering) setIsDiscovering(false)
+    }
   }
 
   const handleCancelScan = async () => {
@@ -796,11 +854,16 @@ export default function NetworkPage() {
 
           {/* Tab bar */}
           <div className="flex items-center border-b border-cyber-border px-4 shrink-0">
-            {([['assets', 'Assets'], ['vulnerabilities', 'Vulnerabilities']] as const).map(([tab, label]) => (
+            {([
+              ['assets', 'Assets'],
+              ['vulnerabilities', 'Vulnerabilities'],
+              ['topology', 'Topology & Traffic'],
+            ] as const).map(([tab, label]) => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                   activeTab === tab ? 'border-cyber-primary text-cyber-primary' : 'border-transparent text-slate-400 hover:text-white'
                 }`}>
+                {tab === 'topology' && <GitBranch className="w-3.5 h-3.5 inline mr-1.5 -mt-0.5" />}
                 {label}
                 {tab === 'assets' && <span className="ml-1.5 text-xs text-slate-500">{filteredNodes.length}</span>}
                 {tab === 'vulnerabilities' && nonInfoVulnCount > 0 && (
@@ -813,6 +876,13 @@ export default function NetworkPage() {
                 className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-cyber-border text-slate-400 hover:text-white hover:border-cyber-primary transition-colors my-auto">
                 <Upload className="w-3 h-3" />
                 Import
+              </button>
+            )}
+            {activeTab === 'topology' && (
+              <button onClick={fetchTopology}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-cyber-border text-slate-400 hover:text-white hover:border-cyber-primary transition-colors my-auto">
+                <RefreshCw className={`w-3 h-3 ${topoLoading ? 'animate-spin' : ''}`} />
+                Refresh
               </button>
             )}
           </div>
@@ -971,6 +1041,50 @@ export default function NetworkPage() {
                     })}
                   </tbody>
                 </table>
+              )
+            )}
+
+            {/* ── TOPOLOGY & TRAFFIC TAB ────────────────────────────────────── */}
+            {activeTab === 'topology' && (
+              topoLoading && !topology ? (
+                <div className="flex justify-center py-16"><LoadingSpinner size="lg" /></div>
+              ) : (
+                <div className="flex flex-col h-full" style={{ minHeight: '600px' }}>
+                  {/* Topology Map */}
+                  <div className="flex-none" style={{ height: '420px' }}>
+                    <div className="h-full border-b border-slate-700/60">
+                      <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-700/40 bg-slate-900/50">
+                        <GitBranch className="w-4 h-4 text-cyan-400" />
+                        <span className="text-sm font-semibold text-white">Network Topology</span>
+                        <span className="text-xs text-slate-500">
+                          {topology ? `${topology.nodes.length} nodes · ${topology.edges.length} connections` : 'Loading…'}
+                        </span>
+                        {topology?.gateway_ip && (
+                          <span className="ml-auto text-xs text-slate-500">
+                            Gateway: <span className="text-blue-400 font-mono">{topology.gateway_ip}</span>
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ height: 'calc(100% - 37px)' }}>
+                        <TopologyMap
+                          nodes={topology?.nodes ?? []}
+                          edges={topology?.edges ?? []}
+                          activeIps={topoActiveIps}
+                          onNodeClick={n => {
+                            if (n.db_id) {
+                              const dbNode = nodes.find(nd => nd.id === n.db_id)
+                              if (dbNode) setSelectedNode(dbNode)
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  {/* Traffic Monitor */}
+                  <div className="flex-1 overflow-hidden" style={{ minHeight: '240px' }}>
+                    <TrafficMonitor onActiveIpsChange={setTopoActiveIps} />
+                  </div>
+                </div>
               )
             )}
           </div>
