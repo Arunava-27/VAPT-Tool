@@ -47,7 +47,7 @@ function riskColor(score: number): { bg: string; border: string; text: string } 
 // ─── Custom node ───────────────────────────────────────────────────────────
 
 function DeviceNode({ data }: NodeProps) {
-  const n = (data as unknown) as TopologyNode & { active?: boolean }
+  const n = (data as unknown) as TopologyNode & { active?: boolean; selected?: boolean }
   const colors = n.is_gateway
     ? { bg: 'bg-blue-900/90', border: 'border-blue-400', text: 'text-blue-200' }
     : n.is_host
@@ -69,7 +69,8 @@ function DeviceNode({ data }: NodeProps) {
       relative rounded-xl border-2 px-3 py-2 min-w-[130px] max-w-[160px]
       cursor-pointer transition-all duration-200 select-none
       ${colors.bg} ${colors.border}
-      ${n.active ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-900' : ''}
+      ${n.selected ? 'ring-2 ring-yellow-400 ring-offset-2 ring-offset-slate-900 scale-105 shadow-lg shadow-yellow-900/30' : ''}
+      ${!n.selected && n.active ? 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-900' : ''}
     `}>
       <Handle type="target" position={Position.Top}    className="!bg-transparent !border-0 !w-0 !h-0" />
       <Handle type="source" position={Position.Bottom} className="!bg-transparent !border-0 !w-0 !h-0" />
@@ -109,7 +110,12 @@ function DeviceNode({ data }: NodeProps) {
         </div>
       )}
 
-      {n.active && (
+      {n.selected && (
+        <div className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full bg-yellow-400 flex items-center justify-center">
+          <div className="w-1.5 h-1.5 rounded-full bg-yellow-900" />
+        </div>
+      )}
+      {!n.selected && n.active && (
         <div className="absolute -top-1.5 -right-1.5 w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
       )}
     </div>
@@ -123,6 +129,7 @@ const nodeTypes = { device: DeviceNode, gateway: DeviceNode, host: DeviceNode }
 function computeLayout(
   tNodes: TopologyNode[],
   activeIps: Set<string>,
+  selectedIp?: string,
 ): Node[] {
   const gw     = tNodes.find(n => n.is_gateway)
   const others = tNodes.filter(n => !n.is_gateway)
@@ -134,7 +141,7 @@ function computeLayout(
     rfNodes.push({
       id: gw.id, type: 'gateway',
       position: { x: 0, y: 0 },
-      data: { ...gw, active: activeIps.has(gw.ip) },
+      data: { ...gw, active: activeIps.has(gw.ip), selected: selectedIp === gw.ip },
     })
   }
   others.forEach((n, i) => {
@@ -142,7 +149,7 @@ function computeLayout(
     rfNodes.push({
       id: n.id, type: n.type,
       position: { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius },
-      data: { ...n, active: activeIps.has(n.ip) },
+      data: { ...n, active: activeIps.has(n.ip), selected: selectedIp === n.ip },
     })
   })
   return rfNodes
@@ -154,6 +161,7 @@ interface TopologyMapProps {
   nodes: TopologyNode[]
   edges: TopologyEdge[]
   activeIps?: Set<string>
+  selectedIp?: string
   onNodeClick?: (n: TopologyNode) => void
 }
 
@@ -161,13 +169,14 @@ export default function TopologyMap({
   nodes: tNodes,
   edges: tEdges,
   activeIps = new Set(),
+  selectedIp,
   onNodeClick,
 }: TopologyMapProps) {
   const initialNodes = useMemo(
-    () => computeLayout(tNodes, activeIps),
-    // recompute only when node set or active ips change
+    () => computeLayout(tNodes, activeIps, selectedIp),
+    // recompute only when node set, active ips, or selection changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tNodes.map(n => n.id).join(','), [...activeIps].join(',')]
+    [tNodes.map(n => n.id).join(','), [...activeIps].join(','), selectedIp]
   )
 
   const rfEdges: Edge[] = useMemo(() => tEdges.map(e => {

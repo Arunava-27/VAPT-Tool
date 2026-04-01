@@ -500,26 +500,9 @@ async def capture_interfaces(
     _: User = Depends(get_current_active_user),
 ) -> Dict[str, Any]:
     """Return interfaces available for packet capture via scapy/Npcap."""
+    from .ws import _get_capture_interfaces
     try:
-        from scapy.arch.windows import get_windows_if_list
-        skip = {"WFP", "QoS", "NDIS", "Pseudo", "Loopback", "Npcap Loopback",
-                "Teredo", "ISATAP", "6to4", "WAN Miniport", "PPTP", "L2TP",
-                "IKEv2", "SSTP", "PPPOE", "Miniport"}
-        seen, result = set(), []
-        for iface in get_windows_if_list():
-            ips = [ip for ip in iface.get("ips", []) if ":" not in ip and ip != "127.0.0.1"]
-            name = iface.get("name", "")
-            desc = iface.get("description", "")
-            if any(k in name for k in skip) or any(k in desc for k in skip):
-                continue
-            if not ips:
-                continue
-            key = tuple(sorted(ips))
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append({"name": name, "description": desc, "ips": ips})
-        return {"interfaces": result}
+        return {"interfaces": _get_capture_interfaces()}
     except Exception as exc:
         return {"interfaces": [], "error": str(exc)}
 

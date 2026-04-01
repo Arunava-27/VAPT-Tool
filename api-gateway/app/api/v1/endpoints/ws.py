@@ -50,20 +50,41 @@ def _auth_ws(websocket: WebSocket) -> Optional[dict]:
 # ─── Packet capture helpers (scapy) ───────────────────────────────────────────
 
 def _get_capture_interfaces() -> list[dict]:
-    """Return usable capture interfaces with IPs (skips loopback/virtual noise)."""
+    """Return usable physical capture interfaces (skips virtual/loopback/VPN adapters)."""
     try:
         from scapy.arch.windows import get_windows_if_list
         seen, result = set(), []
+
+        # Keywords in name OR description that indicate a virtual/software adapter
+        SKIP = {
+            # Loopback / null
+            "Loopback", "Npcap Loopback",
+            # Windows noise
+            "WFP", "QoS", "NDIS", "Pseudo", "Teredo", "ISATAP", "6to4",
+            "WAN Miniport", "PPTP", "L2TP", "IKEv2", "SSTP", "PPPOE", "Miniport",
+            # Hyper-V / WSL / Docker virtual switches
+            "vEthernet", "Hyper-V", "WSL", "Docker",
+            # VMware / VirtualBox
+            "VMware", "VirtualBox", "VBox",
+            # VPN / overlay adapters
+            "TAP", "TUN", "OpenVPN", "WireGuard", "Tailscale", "ZeroTier",
+            "Hamachi", "NordVPN", "ExpressVPN", "Mullvad",
+            # Generic "Virtual" label
+            "Virtual",
+        }
+
+        def _should_skip(text: str) -> bool:
+            tl = text.lower()
+            return any(kw.lower() in tl for kw in SKIP)
+
         for iface in get_windows_if_list():
-            ips = [ip for ip in iface.get("ips", []) if ":" not in ip and ip != "127.0.0.1"]
             name = iface.get("name", "")
             desc = iface.get("description", "")
-            # Skip virtual/loopback noise
-            skip_keywords = ["WFP", "QoS", "NDIS", "Pseudo", "Loopback", "Npcap Loopback",
-                             "Teredo", "ISATAP", "6to4", "WAN Miniport", "PPTP", "L2TP",
-                             "IKEv2", "SSTP", "PPPOE", "Miniport"]
-            if any(k in name for k in skip_keywords) or any(k in desc for k in skip_keywords):
+            if _should_skip(name) or _should_skip(desc):
                 continue
+            # Only include adapters with a real IPv4 address
+            ips = [ip for ip in iface.get("ips", [])
+                   if ":" not in ip and not ip.startswith("127.") and ip != "0.0.0.0"]
             if not ips:
                 continue
             key = tuple(sorted(ips))
@@ -71,6 +92,7 @@ def _get_capture_interfaces() -> list[dict]:
                 continue
             seen.add(key)
             result.append({"name": name, "description": desc, "ips": ips})
+
         return result
     except ImportError:
         return []
@@ -385,8 +407,8 @@ async def traffic_ws(websocket: WebSocket):
             try:
                 await websocket.send_text(json.dumps({
                     "type": "stats",
-                    "total": total_captured[0],
-                    "rate": r,
+                    "total_packets": total_captured[0],
+                    "pps": r,
                     "iface": iface_name,
                     "filter": bpf_filter,
                 }))
@@ -399,7 +421,13 @@ async def traffic_ws(websocket: WebSocket):
 
     try:
         while True:
-            pkt = await asyncio.wait_for(pkt_queue.get(), timeout=5.0)
+            try:
+                pkt = await asyncio.wait_for(pkt_queue.get(), timeout=5.0)
+            except asyncio.TimeoutError:
+                # No packet in 5 s — keep alive unless capture was stopped
+                if stop_event.is_set():
+                    break
+                continue  # ← keep waiting; do NOT exit the loop
             if pkt.get("type") == "_done":
                 break
             if pkt.get("type") == "error":
@@ -407,8 +435,6 @@ async def traffic_ws(websocket: WebSocket):
                 break
             pkt["type"] = "packet"
             await websocket.send_text(json.dumps(pkt))
-    except asyncio.TimeoutError:
-        pass
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -436,11 +462,14 @@ async def discovery_ws(websocket: WebSocket):
       network_range  – CIDR to scan (optional, auto-detected if omitted)
 
     Server sends:
-      {"type": "started",  "network_range": "..."}
-      {"type": "node",     "node": {...}}       – one per discovered host
+      {"type": "started",  "network_range": "...", "total": N}
+      {"type": "node",     "node": <NetworkNode dict>}   – one per host, saved to DB
       {"type": "done",     "total": N, "network_range": "..."}
       {"type": "error",    "message": "..."}
     """
+    from ....models.network import NetworkNode as NetworkNodeModel
+    from datetime import datetime
+
     payload = _auth_ws(websocket)
     if not payload:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -448,10 +477,11 @@ async def discovery_ws(websocket: WebSocket):
 
     await websocket.accept()
 
-    network_range: Optional[str] = websocket.query_params.get("network_range")
+    network_range: Optional[str] = websocket.query_params.get("network_range") or None
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # Host-agent full multi-method scan (scapy ARP + nmap + ping sweep) ~20-30s
+        async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{HOST_AGENT_URL}/discover",
                 json={"network_range": network_range},
@@ -459,17 +489,81 @@ async def discovery_ws(websocket: WebSocket):
             data = resp.json()
 
         nr = data.get("network_range", network_range or "unknown")
-        await websocket.send_text(json.dumps({"type": "started", "network_range": nr}))
+        nodes_raw = data.get("nodes", [])
 
-        nodes = data.get("nodes", [])
-        # Stream each node with a small delay for live feel
-        for i, node in enumerate(nodes):
-            await websocket.send_text(json.dumps({"type": "node", "node": node, "index": i}))
-            await asyncio.sleep(0.05)  # 50ms between nodes
+        await websocket.send_text(json.dumps({
+            "type": "started",
+            "network_range": nr,
+            "total": len(nodes_raw),
+        }))
+
+        # ── Save each node to DB and stream proper NetworkNode dicts ──────────
+        db: Session = SessionLocal()
+        try:
+            found_ips = {n.get("ip") for n in nodes_raw if n.get("ip")}
+            # Mark previously-seen nodes on this range as inactive if not found now
+            if found_ips:
+                db.query(NetworkNodeModel).filter(
+                    NetworkNodeModel.network_range == nr,
+                    ~NetworkNodeModel.ip_address.in_(found_ips),
+                ).update({"status": "inactive"}, synchronize_session=False)
+
+            for i, n in enumerate(nodes_raw):
+                ip = n.get("ip")
+                if not ip:
+                    continue
+
+                node = (
+                    db.query(NetworkNodeModel)
+                    .filter(NetworkNodeModel.ip_address == ip)
+                    .first()
+                )
+                if node:
+                    node.mac_address = n.get("mac") or node.mac_address
+                    node.hostname    = n.get("hostname") or node.hostname
+                    node.device_type = n.get("device_type") or node.device_type
+                    node.status      = "active"
+                    node.last_seen_at = datetime.utcnow()
+                else:
+                    node = NetworkNodeModel(
+                        ip_address   = ip,
+                        mac_address  = n.get("mac"),
+                        hostname     = n.get("hostname"),
+                        device_type  = n.get("device_type", "unknown"),
+                        network_range= nr,
+                        status       = "active",
+                        last_seen_at = datetime.utcnow(),
+                    )
+                    db.add(node)
+
+                db.flush()
+
+                node_dict = {
+                    "id":                  str(node.id),
+                    "ip_address":          node.ip_address,
+                    "mac_address":         node.mac_address,
+                    "hostname":            node.hostname,
+                    "os_family":           node.os_family,
+                    "os_version":          node.os_version,
+                    "device_type":         node.device_type,
+                    "open_ports":          node.open_ports or [],
+                    "services":            node.services or [],
+                    "status":              node.status,
+                    "network_range":       node.network_range,
+                    "risk_score":          node.risk_score or 0,
+                    "first_discovered_at": node.first_discovered_at.isoformat() if node.first_discovered_at else None,
+                    "last_seen_at":        node.last_seen_at.isoformat() if node.last_seen_at else None,
+                }
+                await websocket.send_text(json.dumps({"type": "node", "node": node_dict, "index": i}))
+                await asyncio.sleep(0.02)
+
+            db.commit()
+        finally:
+            db.close()
 
         await websocket.send_text(json.dumps({
             "type": "done",
-            "total": len(nodes),
+            "total": len(nodes_raw),
             "network_range": nr,
         }))
         await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)

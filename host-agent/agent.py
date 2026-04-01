@@ -69,25 +69,65 @@ def _is_private(ip: str) -> bool:
 
 
 def _detect_subnet_windows() -> Optional[str]:
-    """Parse ipconfig /all to find the first private LAN subnet."""
+    """
+    Parse ipconfig /all to find the best LAN subnet.
+    Priority: prefer /24 networks on physical adapters, skip WSL/Docker/VPN/Hyper-V.
+    """
+    VIRTUAL_KEYWORDS = {"wsl", "docker", "hyper-v", "virtual", "loopback",
+                        "vpn", "tap", "tun", "miniport", "teredo", "6to4",
+                        "isatap", "vethernet"}
     try:
         out = subprocess.check_output(["ipconfig", "/all"], text=True, timeout=10)
-        current_ip = None
-        current_mask = None
+        candidates = []     # list of (prefix_len, ip, mask, adapter_name)
+        adapter_name = ""
+        current_ip = current_mask = None
+        is_virtual = False
         for line in out.splitlines():
-            line = line.strip()
-            ip_match = re.search(r"IPv4 Address.*?:\s*([\d.]+)", line)
-            mask_match = re.search(r"Subnet Mask.*?:\s*([\d.]+)", line)
+            stripped = line.strip()
+            # Detect new adapter block
+            if line and not line.startswith(" ") and ":" in line:
+                # Save previous adapter's candidate
+                if current_ip and current_mask and _is_private(current_ip) and not is_virtual:
+                    try:
+                        net = ipaddress.IPv4Network(f"{current_ip}/{current_mask}", strict=False)
+                        candidates.append((net.prefixlen, current_ip, current_mask, adapter_name, net))
+                    except ValueError:
+                        pass
+                adapter_name = line.strip().rstrip(":")
+                is_virtual = any(k in adapter_name.lower() for k in VIRTUAL_KEYWORDS)
+                current_ip = current_mask = None
+            ip_match   = re.search(r"IPv4 Address.*?:\s*([\d.]+)", stripped)
+            mask_match = re.search(r"Subnet Mask.*?:\s*([\d.]+)", stripped)
             if ip_match:
-                current_ip = ip_match.group(1).rstrip("(Preferred)")
+                current_ip = ip_match.group(1).replace("(Preferred)", "").strip()
             if mask_match:
                 current_mask = mask_match.group(1)
-            if current_ip and current_mask and _is_private(current_ip):
-                try:
-                    net = ipaddress.IPv4Network(f"{current_ip}/{current_mask}", strict=False)
-                    return str(net)
-                except ValueError:
-                    current_ip = current_mask = None
+        # Last adapter
+        if current_ip and current_mask and _is_private(current_ip) and not is_virtual:
+            try:
+                net = ipaddress.IPv4Network(f"{current_ip}/{current_mask}", strict=False)
+                candidates.append((net.prefixlen, current_ip, current_mask, adapter_name, net))
+            except ValueError:
+                pass
+
+        if not candidates:
+            return None
+
+        # Prefer larger prefix (more specific network), prioritize /24
+        # Sort: prefer /24 (=best), then larger prefixlen, skip gigantic nets
+        def _score(c):
+            pl = c[0]
+            if pl == 24:
+                return 0       # perfect
+            if pl > 24:
+                return 1       # smaller subnet, fine
+            if pl >= 20:
+                return 2       # medium, acceptable
+            return 3           # huge, last resort
+
+        candidates.sort(key=lambda c: (_score(c), -(c[0])))
+        best = candidates[0]
+        return str(best[4])
     except Exception:
         pass
     return None
@@ -174,65 +214,193 @@ def _get_gateway() -> Optional[str]:
     return None
 
 
-def _discover_arp() -> List[Dict]:
-    """Quick discovery using the OS ARP cache — zero extra tools needed."""
+def _all_hosts(network_range: str) -> List[str]:
+    """Enumerate all host IPs in a network range (skip network/broadcast).
+    Capped at /20 (4094) for safety; active ping sweep only runs on /24 or smaller.
+    """
+    try:
+        net = ipaddress.IPv4Network(network_range, strict=False)
+        if net.num_addresses > 65536:
+            return []
+        # Cap active sweep at 254 hosts (/24); larger nets rely on scapy+nmap
+        if net.num_addresses > 256:
+            return []
+        return [str(h) for h in net.hosts()]
+    except ValueError:
+        return []
+
+
+def _all_lan_ranges() -> List[str]:
+    """Return all private /24 ranges from all physical adapters (multi-homed support)."""
+    ranges = []
+    VIRTUAL_KEYWORDS = {"wsl", "docker", "hyper-v", "virtual", "loopback",
+                        "vpn", "tap", "tun", "miniport", "teredo", "6to4",
+                        "isatap", "vethernet"}
+    try:
+        if platform.system() == "Windows":
+            out = subprocess.check_output(["ipconfig", "/all"], text=True, timeout=10)
+            adapter_name = ""
+            is_virtual = False
+            for line in out.splitlines():
+                stripped = line.strip()
+                if line and not line.startswith(" ") and ":" in line:
+                    adapter_name = line.strip().rstrip(":")
+                    is_virtual = any(k in adapter_name.lower() for k in VIRTUAL_KEYWORDS)
+                ip_m   = re.search(r"IPv4 Address.*?:\s*([\d.]+)", stripped)
+                mask_m = re.search(r"Subnet Mask.*?:\s*([\d.]+)", stripped)
+                if ip_m and mask_m and not is_virtual:
+                    ip = ip_m.group(1).replace("(Preferred)", "").strip()
+                    mask = mask_m.group(1)
+                    if _is_private(ip):
+                        try:
+                            net = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+                            if net.prefixlen <= 24:
+                                # Normalise to /24 for scanning
+                                net24 = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+                                s = str(net24)
+                                if s not in ranges:
+                                    ranges.append(s)
+                        except ValueError:
+                            pass
+        else:
+            out = subprocess.check_output(["ip", "-4", "addr", "show"], text=True, timeout=10)
+            for line in out.splitlines():
+                m = re.search(r"inet\s+([\d.]+)/(\d+).*scope\s+global", line)
+                if m:
+                    ip, pl = m.group(1), int(m.group(2))
+                    if _is_private(ip) and pl <= 24:
+                        net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+                        s = str(net)
+                        if s not in ranges:
+                            ranges.append(s)
+    except Exception:
+        pass
+    return ranges
+
+
+def _discover_scapy_arp(network_range: str) -> List[Dict]:
+    """
+    Netdiscover-style active ARP scan — sends ARP who-has to EVERY IP in the
+    subnet.  This is the most reliable way to find all LAN devices.
+    Requires scapy + Npcap (Windows) or raw-socket access (Linux/root).
+    """
     nodes: Dict[str, Dict] = {}
     try:
-        out = subprocess.check_output(["arp", "-a"], text=True, timeout=10)
-        for line in out.splitlines():
-            # Windows:  192.168.1.1   aa-bb-cc-dd-ee-ff  dynamic
-            # Linux:    ? (192.168.1.1) at aa:bb:cc:dd:ee:ff ...
-            ip_match  = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", line)
-            mac_match = re.search(r"([\da-fA-F]{2}[:\-]){5}[\da-fA-F]{2}", line)
-            if not ip_match:
-                continue
-            ip = ip_match.group(1)
-            if not _is_private(ip):
-                continue
-            # Skip broadcast / multicast
-            last_octet = int(ip.split(".")[-1])
-            if last_octet in (0, 255) or ip.startswith("224."):
-                continue
-            mac = mac_match.group(0).replace("-", ":").lower() if mac_match else None
-            if mac in ("ff:ff:ff:ff:ff:ff", None) or mac and mac.startswith("01:"):
-                mac = None
-            nodes[ip] = {"ip": ip, "mac": mac, "hostname": None}
+        from scapy.all import ARP, Ether, srp  # type: ignore
+        pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=network_range)
+        answered, _ = srp(pkt, timeout=2, verbose=0, retry=1)
+        for _, rcv in answered:
+            ip  = rcv[ARP].psrc
+            mac = rcv[Ether].src.lower()
+            if _is_private(ip) and mac not in ("ff:ff:ff:ff:ff:ff",):
+                nodes[ip] = {"ip": ip, "mac": mac, "hostname": None}
     except Exception:
         pass
     return list(nodes.values())
 
 
-def _resolve_hostnames(nodes: List[Dict]) -> None:
-    """Parallel reverse DNS — all hosts resolved concurrently with 1s timeout each."""
-    socket.setdefaulttimeout(1.0)
+def _ping_one(ip: str) -> bool:
+    """Single ICMP ping — returns True if host responds."""
+    try:
+        if platform.system() == "Windows":
+            r = subprocess.run(
+                ["ping", "-n", "1", "-w", "500", ip],
+                capture_output=True, timeout=2
+            )
+            return r.returncode == 0
+        else:
+            r = subprocess.run(
+                ["ping", "-c", "1", "-W", "1", ip],
+                capture_output=True, timeout=2
+            )
+            return r.returncode == 0
+    except Exception:
+        return False
 
-    def _resolve(node: Dict) -> None:
+
+def _tcp_probe(ip: str, ports: List[int] = (80, 443, 22, 445, 3389),
+               timeout: float = 0.5) -> bool:
+    """Try TCP connect on common ports — catches hosts that block ICMP."""
+    for port in ports:
         try:
-            node["hostname"] = socket.gethostbyaddr(node["ip"])[0]
-        except Exception:
+            with socket.create_connection((ip, port), timeout=timeout):
+                return True
+        except (ConnectionRefusedError, OSError):
+            # ConnectionRefused means host IS up (it replied with RST)
+            if isinstance(Exception, ConnectionRefusedError):
+                return True
+        except socket.timeout:
             pass
+    return False
 
-    with ThreadPoolExecutor(max_workers=min(32, len(nodes) or 1)) as pool:
-        list(pool.map(_resolve, nodes))
 
-    socket.setdefaulttimeout(None)
+def _is_port_refused(ip: str, port: int, timeout: float = 0.4) -> bool:
+    """A RST (connection refused) means the host is UP even if port is closed."""
+    try:
+        socket.create_connection((ip, port), timeout=timeout)
+        return True
+    except ConnectionRefusedError:
+        return True   # host is alive — sent RST
+    except Exception:
+        return False
+
+
+def _discover_ping_sweep(network_range: str) -> List[Dict]:
+    """
+    Parallel ICMP ping + TCP probe sweep — active host discovery without any
+    extra tools.  Uses ThreadPoolExecutor to probe all hosts concurrently.
+    """
+    all_ips = _all_hosts(network_range)
+    if not all_ips:
+        return []
+
+    found: Dict[str, Dict] = {}
+    # Minimal set — RST on these means host is alive even if ICMP is blocked
+    TCP_PROBE_PORTS = [80, 443, 445, 22, 3389]
+
+    def _probe(ip: str) -> Optional[str]:
+        if _ping_one(ip):
+            return ip
+        # TCP probes for ICMP-blocking hosts
+        for port in TCP_PROBE_PORTS:
+            if _is_port_refused(ip, port, timeout=0.2):
+                return ip
+        return None
+
+    max_workers = min(256, len(all_ips))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for ip, alive in zip(all_ips, pool.map(_probe, all_ips)):
+            if alive:
+                found[ip] = {"ip": ip, "mac": None, "hostname": None}
+
+    return list(found.values())
 
 
 def _discover_nmap(network_range: str) -> List[Dict]:
-    """Full ping-sweep with nmap — richer but requires nmap on PATH."""
+    """
+    nmap -sn ping sweep — most thorough host discovery.
+    Uses ICMP echo/timestamp + TCP SYN to common ports.
+    Runs as primary method when nmap is on PATH.
+    """
     nodes: Dict[str, Dict] = {}
     cmd = [
         "nmap", "-sn",
-        "-PE", "-PP",
-        "-PS22,80,443,3389",
-        "-PA80,443",
-        "-T4", "--host-timeout", "20s",
-        "--min-parallelism", "10",
+        "-PE", "-PP", "-PM",                    # ICMP echo, timestamp, netmask
+        "-PS21,22,23,25,80,110,443,445,3389",   # TCP SYN probes
+        "-PA80,443,3389",                        # TCP ACK probes
+        "-PU53,161",                             # UDP probes
+        "-T4",
+        "--host-timeout", "8s",
+        "--min-parallelism", "100",
+        "--min-rtt-timeout", "50ms",
+        "--max-rtt-timeout", "300ms",
         "-oX", "-",
         network_range,
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if not result.stdout.strip():
+            return nodes
         root = ET.fromstring(result.stdout)
         for host in root.findall("host"):
             status = host.find("status")
@@ -248,10 +416,96 @@ def _discover_nmap(network_range: str) -> List[Dict]:
             hostname = hostname_el.get("name") if hostname_el is not None else None
             nodes[ip] = {"ip": ip, "mac": mac, "hostname": hostname}
     except FileNotFoundError:
-        pass  # nmap not installed
+        pass  # nmap not on PATH
     except Exception:
         pass
     return list(nodes.values())
+
+
+def _discover_arp_cache() -> List[Dict]:
+    """Supplement results with the OS ARP cache (zero-cost, instant)."""
+    nodes: Dict[str, Dict] = {}
+    try:
+        out = subprocess.check_output(["arp", "-a"], text=True, timeout=10)
+        for line in out.splitlines():
+            ip_match  = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", line)
+            mac_match = re.search(r"([\da-fA-F]{2}[:\-]){5}[\da-fA-F]{2}", line)
+            if not ip_match:
+                continue
+            ip = ip_match.group(1)
+            if not _is_private(ip):
+                continue
+            last_octet = int(ip.split(".")[-1])
+            if last_octet in (0, 255) or ip.startswith("224."):
+                continue
+            mac = mac_match.group(0).replace("-", ":").lower() if mac_match else None
+            if mac in ("ff:ff:ff:ff:ff:ff",):
+                mac = None
+            if mac and mac.startswith("01:"):
+                mac = None
+            nodes[ip] = {"ip": ip, "mac": mac, "hostname": None}
+    except Exception:
+        pass
+    return list(nodes.values())
+
+
+def _enrich_mac_from_arp(nodes_map: Dict[str, Dict]) -> None:
+    """Fill in missing MACs from ARP cache for already-found IPs."""
+    cache = {n["ip"]: n for n in _discover_arp_cache()}
+    for ip, node in nodes_map.items():
+        if not node.get("mac") and ip in cache and cache[ip].get("mac"):
+            node["mac"] = cache[ip]["mac"]
+
+
+def _nbtscan(network_range: str) -> Dict[str, str]:
+    """
+    NetBIOS name resolution via nbtstat (Windows only) — gives Windows
+    machine names for IPs that don't have DNS PTR records.
+    Returns {ip: netbios_name}.
+    """
+    names: Dict[str, str] = {}
+    if platform.system() != "Windows":
+        return names
+    all_ips = _all_hosts(network_range)[:254]  # cap for speed
+
+    def _nbt(ip: str) -> Optional[tuple]:
+        try:
+            r = subprocess.run(
+                ["nbtstat", "-A", ip],
+                capture_output=True, text=True, timeout=2
+            )
+            for line in r.stdout.splitlines():
+                # Lines like:  DESKTOP-ABC    <00>  UNIQUE  Registered
+                m = re.match(r"\s+(\S+)\s+<00>\s+UNIQUE", line)
+                if m:
+                    return (ip, m.group(1))
+        except Exception:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=min(50, len(all_ips) or 1)) as pool:
+        for res in pool.map(_nbt, all_ips):
+            if res:
+                names[res[0]] = res[1]
+    return names
+
+
+def _resolve_hostnames(nodes: List[Dict]) -> None:
+    """Parallel reverse DNS — all hosts resolved concurrently with 1s timeout."""
+    socket.setdefaulttimeout(1.0)
+
+    def _resolve(node: Dict) -> None:
+        if node.get("hostname"):
+            return
+        try:
+            node["hostname"] = socket.gethostbyaddr(node["ip"])[0]
+        except Exception:
+            pass
+
+    with ThreadPoolExecutor(max_workers=min(64, len(nodes) or 1)) as pool:
+        list(pool.map(_resolve, nodes))
+
+    socket.setdefaulttimeout(None)
 
 
 # ─── Interface enumeration ───────────────────────────────────────────────────
@@ -323,16 +577,90 @@ async def interfaces() -> Dict[str, Any]:
 
 @app.post("/discover", response_model=DiscoverResponse)
 async def discover(body: DiscoverRequest) -> DiscoverResponse:
-    network_range = body.network_range or detect_subnet()
-    if not network_range:
-        network_range = "192.168.1.0/24"  # safe fallback
+    # If caller specifies a range use it; otherwise scan ALL detected LAN ranges
+    if body.network_range:
+        ranges_to_scan = [body.network_range]
+    else:
+        ranges_to_scan = _all_lan_ranges()
+        if not ranges_to_scan:
+            primary = detect_subnet() or "192.168.1.0/24"
+            ranges_to_scan = [primary]
 
-    gateway_ip = _get_gateway()
+    gateway_ip  = _get_gateway()
+    merged: Dict[str, Dict] = {}
+    methods_used: List[str] = []
 
-    # ARP is instant — use it for discovery. Nmap is reserved for deep per-host scanning.
-    raw_nodes = _discover_arp()
-    _resolve_hostnames(raw_nodes)
-    method = "arp"
+    def _merge(results: List[Dict], method: str) -> None:
+        if results and method not in methods_used:
+            methods_used.append(method)
+        for n in results:
+            ip = n["ip"]
+            if ip not in merged:
+                merged[ip] = dict(n)
+            else:
+                if not merged[ip].get("mac") and n.get("mac"):
+                    merged[ip]["mac"] = n["mac"]
+                if not merged[ip].get("hostname") and n.get("hostname"):
+                    merged[ip]["hostname"] = n["hostname"]
+
+    loop = asyncio.get_event_loop()
+
+    # ── Scan each detected range in parallel ─────────────────────────────────
+    for net_range in ranges_to_scan:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_scapy = loop.run_in_executor(pool, _discover_scapy_arp,  net_range)
+            f_nmap  = loop.run_in_executor(pool, _discover_nmap,       net_range)
+            f_ping  = loop.run_in_executor(pool, _discover_ping_sweep, net_range)
+            f_arp   = loop.run_in_executor(pool, _discover_arp_cache)
+
+            try:
+                scapy_r, nmap_r, ping_r, arp_r = await asyncio.wait_for(
+                    asyncio.gather(f_scapy, f_nmap, f_ping, f_arp,
+                                   return_exceptions=True),
+                    timeout=90,
+                )
+            except asyncio.TimeoutError:
+                scapy_r = nmap_r = ping_r = arp_r = []
+
+        for res, label in [
+            (scapy_r, "scapy-arp"),
+            (nmap_r,  "nmap-sn"),
+            (ping_r,  "ping-sweep"),
+            (arp_r,   "arp-cache"),
+        ]:
+            if isinstance(res, list):
+                _merge(res, label)
+
+    if not methods_used:
+        methods_used = ["none"]
+
+    # ── Enrich MACs for ping/nmap-found hosts from ARP cache ─────────────────
+    _enrich_mac_from_arp(merged)
+
+    # ── Resolve hostnames in parallel (DNS) ───────────────────────────────────
+    node_list = list(merged.values())
+    _resolve_hostnames(node_list)
+
+    # NetBIOS names only for already-found IPs (not a full sweep)
+    if platform.system() == "Windows" and node_list:
+        def _nbt_single(node: Dict) -> None:
+            if node.get("hostname"):
+                return
+            try:
+                r = subprocess.run(
+                    ["nbtstat", "-A", node["ip"]],
+                    capture_output=True, text=True, timeout=1
+                )
+                for line in r.stdout.splitlines():
+                    m = re.match(r"\s+(\S+)\s+<00>\s+UNIQUE", line)
+                    if m:
+                        node["hostname"] = m.group(1)
+                        break
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=min(30, len(node_list))) as pool:
+            list(pool.map(_nbt_single, node_list))
 
     nodes = [
         NodeResult(
@@ -343,10 +671,14 @@ async def discover(body: DiscoverRequest) -> DiscoverResponse:
                 n["ip"], n.get("mac"), n.get("hostname"), gateway_ip
             ),
         )
-        for n in raw_nodes
+        for n in node_list
     ]
 
-    return DiscoverResponse(network_range=network_range, nodes=nodes, method=method)
+    return DiscoverResponse(
+        network_range=", ".join(ranges_to_scan),
+        nodes=nodes,
+        method="+".join(methods_used),
+    )
 
 
 class ScanNodeRequest(BaseModel):

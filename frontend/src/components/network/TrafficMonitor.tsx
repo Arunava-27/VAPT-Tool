@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity, Play, Square, Trash2, WifiOff, Filter,
-  ChevronDown, Radio,
+  ChevronDown, Radio, X,
 } from 'lucide-react'
-import { CaptureInterface, CapturePacket, trafficWsUrl } from '../../api/network'
+import { CaptureInterface, CapturePacket, trafficWsUrl, getCaptureInterfaces } from '../../api/network'
 import { store } from '../../store'
 
 interface TrafficMonitorProps {
   onActiveIpsChange?: (ips: Set<string>) => void
+  hostFilter?: string  // if set, auto-starts capture filtered to this IP
 }
 
 // Wireshark-inspired row colors
@@ -42,7 +43,7 @@ function fmt(ts: number) {
 
 type WsState = 'disconnected' | 'connecting' | 'capturing' | 'stopped' | 'error'
 
-export default function TrafficMonitor({ onActiveIpsChange }: TrafficMonitorProps) {
+export default function TrafficMonitor({ onActiveIpsChange, hostFilter }: TrafficMonitorProps) {
   const [wsState, setWsState]         = useState<WsState>('disconnected')
   const [packets, setPackets]         = useState<CapturePacket[]>([])
   const [stats, setStats]             = useState({ total: 0, pps: 0 })
@@ -86,7 +87,8 @@ export default function TrafficMonitor({ onActiveIpsChange }: TrafficMonitorProp
         if (msg.type === 'interfaces') {
           const list: CaptureInterface[] = msg.interfaces
           setInterfaces(list)
-          if (!iface && list.length > 0) setSelectedIface(list[0].name)
+          // Only auto-select if user hasn't chosen one yet (functional updater avoids stale closure)
+          setSelectedIface(prev => prev || (list[0]?.name ?? ''))
         } else if (msg.type === 'packet') {
           const pkt = msg as CapturePacket
           setPackets(prev => {
@@ -118,8 +120,81 @@ export default function TrafficMonitor({ onActiveIpsChange }: TrafficMonitorProp
     }
   }, [disconnect, selectedIface, appliedFilter, onActiveIpsChange])
 
+  // Auto-start capture filtered to hostFilter IP when it changes
+  useEffect(() => {
+    if (!hostFilter) return
+    const bpf = `host ${hostFilter}`
+    setBpfFilter(bpf)
+    setAppliedFilter(bpf)
+    setPackets([])
+    setStats({ total: 0, pps: 0 })
+    setSelectedRow(null)
+    setError(null)
+    if (wsRef.current) {
+      try { wsRef.current.send(JSON.stringify({ action: 'stop' })) } catch { /* ignore */ }
+      wsRef.current.close()
+      wsRef.current = null
+    }
+    const token = store.getState().auth.accessToken ?? ''
+    const ifaceAtStart = selectedIface || undefined
+    setWsState('connecting')
+    const url = trafficWsUrl(token, ifaceAtStart, bpf)
+    const ws = new WebSocket(url)
+    wsRef.current = ws
+    ws.onopen  = () => setWsState('capturing')
+    ws.onerror = () => { setError('WebSocket connection failed'); setWsState('error') }
+    ws.onclose = (ev) => { if (wsRef.current === ws) wsRef.current = null; setWsState(ev.code !== 1000 ? 'error' : 'stopped') }
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data as string)
+        if (msg.type === 'interfaces') {
+          const list: CaptureInterface[] = msg.interfaces
+          setInterfaces(list)
+          setSelectedIface(prev => prev || (list[0]?.name ?? ''))
+        } else if (msg.type === 'packet') {
+          const pkt = msg as CapturePacket
+          setPackets(prev => {
+            const next = prev.length >= MAX_PACKETS ? prev.slice(-MAX_PACKETS + 1) : [...prev]
+            next.push(pkt)
+            return next
+          })
+          onActiveIpsChange?.(new Set([pkt.src, pkt.dst].filter(ip =>
+            !ip.startsWith('127.') && !ip.startsWith('::') && ip !== '0.0.0.0'
+          )))
+        } else if (msg.type === 'stats') {
+          setStats({ total: msg.total_packets, pps: msg.pps })
+        } else if (msg.type === 'error') {
+          setError(msg.message)
+          setWsState('error')
+        }
+      } catch { /* ignore */ }
+    }
+    // Cleanup: null handlers then close so StrictMode teardown doesn't
+    // trigger onerror/onclose on stale ws and block the remount reconnect
+    return () => {
+      ws.onopen = null
+      ws.onerror = null
+      ws.onclose = null
+      ws.onmessage = null
+      ws.close()
+      if (wsRef.current === ws) wsRef.current = null
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostFilter])
+
   // Cleanup on unmount
   useEffect(() => () => { disconnect() }, [disconnect])
+
+  // Load available interfaces immediately on mount (before user clicks Start)
+  useEffect(() => {
+    getCaptureInterfaces()
+      .then(res => {
+        const list: CaptureInterface[] = res.data.interfaces ?? []
+        setInterfaces(list)
+        if (list.length > 0) setSelectedIface(list[0].name)
+      })
+      .catch(() => { /* silently ignore — will load when WS connects */ })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -158,7 +233,7 @@ export default function TrafficMonitor({ onActiveIpsChange }: TrafficMonitorProp
         {/* Start / Stop */}
         {wsState !== 'capturing' ? (
           <button
-            onClick={() => connect()}
+            onClick={() => connect(selectedIface, appliedFilter || bpfFilter)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-medium rounded transition-colors"
           >
             <Play className="w-3 h-3" /> Start
@@ -179,21 +254,35 @@ export default function TrafficMonitor({ onActiveIpsChange }: TrafficMonitorProp
           <Trash2 className="w-3 h-3" /> Clear
         </button>
 
+        {/* Host filter badge — shown when monitoring a specific node */}
+        {hostFilter && (
+          <span className="flex items-center gap-1.5 px-2.5 py-1 bg-yellow-900/40 border border-yellow-700/50 rounded text-xs text-yellow-300">
+            <Activity className="w-3 h-3 flex-shrink-0" />
+            Your traffic with <span className="font-mono ml-1">{hostFilter}</span>
+          </span>
+        )}
+
         {/* Interface selector */}
         <div className="relative flex items-center gap-1.5">
           <Radio className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
           <div className="relative">
             <select
               value={selectedIface}
-              onChange={e => setSelectedIface(e.target.value)}
-              disabled={wsState === 'capturing'}
-              className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 pr-6 appearance-none focus:outline-none focus:border-cyan-500 disabled:opacity-50"
+              onChange={e => {
+                const newIface = e.target.value
+                setSelectedIface(newIface)
+                if (wsState === 'capturing') {
+                  // Restart capture on the newly selected interface
+                  connect(newIface, appliedFilter || bpfFilter)
+                }
+              }}
+              className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-slate-200 pr-6 appearance-none focus:outline-none focus:border-cyan-500"
             >
               {interfaces.length === 0
                 ? <option value="">Connect to load interfaces…</option>
                 : interfaces.map(i => (
                   <option key={i.name} value={i.name}>
-                    {i.name}{i.ips.length ? ` (${i.ips[0]})` : ''}
+                    {i.description || i.name}{i.ips.length ? ` (${i.ips[0]})` : ''}
                   </option>
                 ))
               }
@@ -273,96 +362,149 @@ export default function TrafficMonitor({ onActiveIpsChange }: TrafficMonitorProp
         </div>
       )}
 
-      {/* ── Packet table ────────────────────────────────────────── */}
-      <div
-        ref={tableRef}
-        className="flex-1 overflow-auto font-mono"
-        onScroll={e => {
-          const el = e.currentTarget
-          autoScroll.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 20
-        }}
-      >
-        {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-40 text-slate-500 text-sm gap-2">
-            <Activity className="w-8 h-8 opacity-30" />
-            {wsState === 'disconnected' || wsState === 'stopped'
-              ? <span>Click <strong className="text-slate-400">Start</strong> to begin live packet capture</span>
-              : wsState === 'capturing'
-              ? <span>Waiting for packets…</span>
-              : <span>No packets match current filter</span>
-            }
-          </div>
-        ) : (
-          <table className="w-full text-[11px] border-collapse">
-            <thead className="sticky top-0 bg-slate-900 z-10">
-              <tr className="text-slate-500 border-b border-slate-700">
-                <th className="text-left px-2 py-1.5 font-medium w-8">#</th>
-                <th className="text-left px-2 py-1.5 font-medium w-24">Time</th>
-                <th className="text-left px-2 py-1.5 font-medium w-32">Source</th>
-                <th className="text-left px-2 py-1.5 font-medium w-32">Destination</th>
-                <th className="text-left px-2 py-1.5 font-medium w-14">Proto</th>
-                <th className="text-left px-2 py-1.5 font-medium w-14">Len</th>
-                <th className="text-left px-2 py-1.5 font-medium">Info</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((pkt, idx) => (
-                <tr
-                  key={idx}
-                  onClick={() => setSelectedRow(idx === selectedRow ? null : idx)}
-                  className={`cursor-pointer border-b border-slate-800/50 hover:brightness-125 transition-colors ${
-                    idx === selectedRow
-                      ? 'bg-cyan-900/40 border-cyan-700/50'
-                      : (PROTO_ROW[pkt.proto] ?? '')
-                  }`}
-                >
-                  <td className="px-2 py-[3px] text-slate-600">{idx + 1}</td>
-                  <td className="px-2 py-[3px] text-slate-500 tabular-nums">{fmt(pkt.ts)}</td>
-                  <td className="px-2 py-[3px] text-slate-300 truncate max-w-[128px]">
-                    {pkt.sport ? `${pkt.src}:${pkt.sport}` : pkt.src}
-                  </td>
-                  <td className="px-2 py-[3px] text-slate-300 truncate max-w-[128px]">
-                    {pkt.dport ? `${pkt.dst}:${pkt.dport}` : pkt.dst}
-                  </td>
-                  <td className="px-2 py-[3px]">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${PROTO_BADGE[pkt.proto] ?? 'text-slate-400 bg-slate-700'}`}>
-                      {pkt.proto}
-                    </span>
-                  </td>
-                  <td className="px-2 py-[3px] text-slate-500 tabular-nums">{pkt.length}</td>
-                  <td className="px-2 py-[3px] text-slate-400 truncate max-w-[300px]">{pkt.info}</td>
+      {/* ── Main area: packet table + slide-in detail panel ─────── */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+
+        {/* Packet table */}
+        <div
+          ref={tableRef}
+          className={`overflow-auto font-mono transition-all duration-200 ${selectedPkt ? 'w-3/5' : 'w-full'}`}
+          onScroll={e => {
+            const el = e.currentTarget
+            autoScroll.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 20
+          }}
+        >
+          {filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-40 text-slate-500 text-sm gap-2">
+              <Activity className="w-8 h-8 opacity-30" />
+              {wsState === 'disconnected' || wsState === 'stopped'
+                ? <span>Click <strong className="text-slate-400">Start</strong> to begin live packet capture</span>
+                : wsState === 'capturing'
+                ? <span>Waiting for packets…</span>
+                : <span>No packets match current filter</span>
+              }
+            </div>
+          ) : (
+            <table className="w-full text-[11px] border-collapse">
+              <thead className="sticky top-0 bg-slate-900 z-10">
+                <tr className="text-slate-500 border-b border-slate-700">
+                  <th className="text-left px-2 py-1.5 font-medium w-8">#</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-24">Time</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-32">Source</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-32">Destination</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-14">Proto</th>
+                  <th className="text-left px-2 py-1.5 font-medium w-14">Len</th>
+                  <th className="text-left px-2 py-1.5 font-medium">Info</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+              </thead>
+              <tbody>
+                {filtered.map((pkt, idx) => (
+                  <tr
+                    key={idx}
+                    onClick={() => setSelectedRow(idx === selectedRow ? null : idx)}
+                    className={`cursor-pointer border-b border-slate-800/50 hover:brightness-125 transition-colors ${
+                      idx === selectedRow
+                        ? 'bg-cyan-900/40 border-cyan-700/50'
+                        : (PROTO_ROW[pkt.proto] ?? '')
+                    }`}
+                  >
+                    <td className="px-2 py-[3px] text-slate-600">{idx + 1}</td>
+                    <td className="px-2 py-[3px] text-slate-500 tabular-nums">{fmt(pkt.ts)}</td>
+                    <td className="px-2 py-[3px] text-slate-300 truncate max-w-[128px]">
+                      {pkt.sport ? `${pkt.src}:${pkt.sport}` : pkt.src}
+                    </td>
+                    <td className="px-2 py-[3px] text-slate-300 truncate max-w-[128px]">
+                      {pkt.dport ? `${pkt.dst}:${pkt.dport}` : pkt.dst}
+                    </td>
+                    <td className="px-2 py-[3px]">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${PROTO_BADGE[pkt.proto] ?? 'text-slate-400 bg-slate-700'}`}>
+                        {pkt.proto}
+                      </span>
+                    </td>
+                    <td className="px-2 py-[3px] text-slate-500 tabular-nums">{pkt.length}</td>
+                    <td className="px-2 py-[3px] text-slate-400 truncate max-w-[300px]">{pkt.info}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* ── Packet detail — slides in from right ────────────────── */}
+        <div className={`flex flex-col border-l border-slate-700 bg-slate-900 overflow-y-auto transition-all duration-200 ${
+          selectedPkt ? 'w-2/5 opacity-100' : 'w-0 opacity-0 overflow-hidden'
+        }`}>
+          {selectedPkt && (
+            <>
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-700 flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${PROTO_BADGE[selectedPkt.proto] ?? 'text-slate-400 bg-slate-700'}`}>
+                    {selectedPkt.proto}
+                  </span>
+                  <span className="text-xs font-semibold text-white">Packet #{(selectedRow ?? 0) + 1}</span>
+                </div>
+                <button
+                  onClick={() => setSelectedRow(null)}
+                  className="text-slate-500 hover:text-white transition-colors"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Fields */}
+              <div className="flex-1 px-4 py-3 text-[11px] font-mono space-y-0">
+                {[
+                  ['Timestamp',    fmt(selectedPkt.ts)],
+                  ['Protocol',     selectedPkt.proto],
+                  ['Length',       `${selectedPkt.length} bytes`],
+                  ['─────────────', ''],
+                  ['Source MAC',   selectedPkt.src_mac || '—'],
+                  ['Dest MAC',     selectedPkt.dst_mac || '—'],
+                  ['─────────────', ''],
+                  ['Source IP',    selectedPkt.src + (selectedPkt.sport ? `:${selectedPkt.sport}` : '')],
+                  ['Dest IP',      selectedPkt.dst  + (selectedPkt.dport ? `:${selectedPkt.dport}` : '')],
+                  ['─────────────', ''],
+                  ['Info',         selectedPkt.info],
+                ].map(([label, value], i) => (
+                  label.startsWith('─') ? (
+                    <div key={i} className="border-t border-slate-800 my-2" />
+                  ) : (
+                    <div key={i} className="flex gap-2 py-0.5">
+                      <span className="text-slate-500 w-24 flex-shrink-0">{label}</span>
+                      <span className={`text-slate-200 break-all ${label === 'Protocol' ? PROTO_BADGE[value] ?? '' : ''} ${label === 'Protocol' ? 'px-1.5 py-0 rounded text-[10px]' : ''}`}>
+                        {value || '—'}
+                      </span>
+                    </div>
+                  )
+                ))}
+              </div>
+
+              {/* Quick-filter shortcut */}
+              <div className="px-4 py-3 border-t border-slate-800 flex-shrink-0 space-y-1.5">
+                <p className="text-[10px] text-slate-500 font-sans mb-2">Quick filters</p>
+                {[
+                  [`host ${selectedPkt.src}`,                `Track ${selectedPkt.src}`],
+                  [`host ${selectedPkt.dst}`,                `Track ${selectedPkt.dst}`],
+                  [`${selectedPkt.proto.toLowerCase()}`,      `Only ${selectedPkt.proto}`],
+                  ...(selectedPkt.dport ? [[`tcp port ${selectedPkt.dport}`, `Port ${selectedPkt.dport}`]] : []),
+                ].map(([filter, label]) => (
+                  <button
+                    key={filter}
+                    onClick={() => { setBpfFilter(filter); setAppliedFilter(filter); if (wsState === 'capturing') connect(undefined, filter) }}
+                    className="w-full text-left text-[10px] px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-400 font-mono rounded transition-colors truncate"
+                  >
+                    {label} <span className="text-slate-600 ml-1">{filter}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* ── Packet detail pane ──────────────────────────────────── */}
-      {selectedPkt && (
-        <div className="flex-shrink-0 border-t border-slate-700 bg-slate-900 px-4 py-3 text-[11px] font-mono">
-          <div className="text-slate-400 mb-1.5 font-sans text-xs font-semibold">Packet Detail</div>
-          <div className="grid grid-cols-2 gap-x-8 gap-y-0.5">
-            <span className="text-slate-500">Timestamp</span>
-            <span className="text-slate-200">{fmt(selectedPkt.ts)}</span>
-            <span className="text-slate-500">Source MAC</span>
-            <span className="text-slate-200">{selectedPkt.src_mac || '—'}</span>
-            <span className="text-slate-500">Dest MAC</span>
-            <span className="text-slate-200">{selectedPkt.dst_mac || '—'}</span>
-            <span className="text-slate-500">Source IP:Port</span>
-            <span className="text-slate-200">{selectedPkt.src}{selectedPkt.sport ? `:${selectedPkt.sport}` : ''}</span>
-            <span className="text-slate-500">Dest IP:Port</span>
-            <span className="text-slate-200">{selectedPkt.dst}{selectedPkt.dport ? `:${selectedPkt.dport}` : ''}</span>
-            <span className="text-slate-500">Protocol</span>
-            <span className="text-cyan-300">{selectedPkt.proto}</span>
-            <span className="text-slate-500">Length</span>
-            <span className="text-slate-200">{selectedPkt.length} bytes</span>
-            <span className="text-slate-500">Info</span>
-            <span className="text-yellow-300 col-span-1">{selectedPkt.info}</span>
-          </div>
-        </div>
-      )}
-
+      {/* ── Status bar ──────────────────────────────────────────── */}
       <div className="px-3 py-1.5 border-t border-slate-700/50 text-[10px] text-slate-600 flex-shrink-0 flex items-center justify-between">
         <span>{filtered.length} of {packets.length} packets shown</span>
         <label className="flex items-center gap-1.5 cursor-pointer select-none">

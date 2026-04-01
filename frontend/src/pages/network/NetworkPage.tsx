@@ -1,12 +1,12 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import {
   Laptop, Smartphone, Router, Server, Wifi, HelpCircle, Printer, Camera,
-  RefreshCw, Search, Trash2, Zap, X, Network, Upload,
-  AlertTriangle, CheckCircle, XCircle, Cpu, Shield, Monitor, GitBranch,
+  RefreshCw, Search, Trash2, Zap, X, Network, Upload, Loader2,
+  AlertTriangle, CheckCircle, XCircle, Cpu, Shield, Monitor, GitBranch, Activity,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
-  getNodes, discoverNetwork, scanNode, deleteNode, getScan,
+  getNodes, scanNode, deleteNode, getScan,
   getHostInterfaces, cancelScan, getHostAgentStatus,
   getNodeVulnerabilities, getAllVulnerabilities, updateVulnStatus,
   getTopology, discoveryWsUrl,
@@ -15,7 +15,7 @@ import apiClient from '../../api/client'
 import { store } from '../../store'
 import type {
   NetworkNode, NetworkScan, HostInterfacesResponse, HostAgentStatus,
-  HostVulnerability, TopologyData,
+  HostVulnerability, TopologyData, TopologyNode,
 } from '../../api/network'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 import TopologyMap from '../../components/network/TopologyMap'
@@ -27,7 +27,6 @@ void Cpu; void Monitor
 // ─── Types ────────────────────────────────────────────────────────────────────
 type FilterType = typeof DEVICE_FILTER_TYPES[number]
 type SeverityFilter = 'all' | 'critical' | 'high' | 'medium' | 'low' | 'info'
-type SortBy = 'ip' | 'risk_score' | 'last_seen'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const DEVICE_ICONS: Record<string, React.ElementType> = {
@@ -48,43 +47,6 @@ const SEV = {
   info:     { label: 'INFO',     dot: 'bg-slate-500',   text: 'text-slate-400',  border: 'border-slate-500/30',  bg: 'bg-slate-500/10'  },
 } as const
 
-const SORT_OPTIONS: { value: SortBy; label: string }[] = [
-  { value: 'ip', label: 'IP Address' },
-  { value: 'risk_score', label: 'Risk Score' },
-  { value: 'last_seen', label: 'Last Seen' },
-]
-
-// ─── HostIPInput ──────────────────────────────────────────────────────────────
-function deriveRange(ip: string): string | null {
-  const parts = ip.trim().split('.')
-  if (parts.length !== 4 || parts.some(p => isNaN(Number(p)) || Number(p) < 0 || Number(p) > 255)) return null
-  return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`
-}
-
-function HostIPInput({ onRangeDetected }: { onRangeDetected: (range: string) => void }) {
-  const [ip, setIp] = useState('')
-  const [error, setError] = useState('')
-  const apply = () => {
-    const range = deriveRange(ip)
-    if (!range) { setError('Enter a valid IPv4 (e.g. 192.168.1.1)'); return }
-    setError(''); onRangeDetected(range); toast.success(`Range set to ${range}`)
-  }
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex gap-1.5">
-        <input
-          value={ip} onChange={e => { setIp(e.target.value); setError('') }}
-          onKeyDown={e => e.key === 'Enter' && apply()}
-          placeholder="e.g. 192.168.1.100"
-          className="flex-1 bg-[#070c1a] border border-cyber-border rounded px-2 py-1.5 text-xs text-white placeholder-slate-600 font-mono focus:outline-none focus:border-cyber-primary"
-        />
-        <button onClick={apply} className="px-2 py-1.5 rounded bg-cyber-primary/10 border border-cyber-primary/30 text-cyber-primary text-xs hover:bg-cyber-primary/20 whitespace-nowrap">Set</button>
-      </div>
-      {error && <p className="text-xs text-rose-400">{error}</p>}
-      {ip && deriveRange(ip) && <p className="text-xs text-slate-500 font-mono">→ {deriveRange(ip)}</p>}
-    </div>
-  )
-}
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 function DeviceIcon({ type, className = 'w-4 h-4' }: { type: string; className?: string }) {
@@ -331,26 +293,24 @@ export default function NetworkPage() {
   const [loadingNodeVulns, setLoadingNodeVulns] = useState(false)
   const [hostIfaces, setHostIfaces] = useState<HostInterfacesResponse | null>(null)
   const [hostAgent, setHostAgent] = useState<HostAgentStatus | null>(null)
-  const [ifacesLoading, setIfacesLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'assets' | 'vulnerabilities' | 'topology'>('assets')
+  const [activeTab, setActiveTab] = useState<'assets' | 'vulnerabilities' | 'topology' | 'traffic'>('assets')
   // Topology state
-  const [topology, setTopology]         = useState<TopologyData | null>(null)
-  const [topoLoading, setTopoLoading]   = useState(false)
+  const [topology, setTopology]           = useState<TopologyData | null>(null)
+  const [topoLoading, setTopoLoading]     = useState(false)
   const [topoActiveIps, setTopoActiveIps] = useState<Set<string>>(new Set())
+  const [topoSelectedNode, setTopoSelectedNode] = useState<TopologyNode | null>(null)
   const [deviceFilter, setDeviceFilter] = useState<FilterType>('all')
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all')
   const [search, setSearch] = useState('')
-  const [sortBy, setSortBy] = useState<SortBy>('ip')
   const [selectedNode, setSelectedNode] = useState<NetworkNode | null>(null)
   const [activeScan, setActiveScan] = useState<NetworkScan | null>(null)
   const [scanningNodeId, setScanningNodeId] = useState<string | null>(null)
   const [scanModal, setScanModal] = useState<NetworkNode | null>(null)
-  const [customRange, setCustomRange] = useState('')
   const [cancelling, setCancelling] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   const [isDiscovering, setIsDiscovering] = useState(false)
-  const [discoveryResult, setDiscoveryResult] = useState<{ nodesFound: number; range: string; newNodes: number } | null>(null)
+  const [discoveryResult, setDiscoveryResult] = useState<{ success: boolean; newNodes?: number; updatedNodes?: number; message?: string } | null>(null)
   const [recentlyFoundIps, setRecentlyFoundIps] = useState<Set<string>>(new Set())
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -405,12 +365,10 @@ export default function NetworkPage() {
       const aMine = myIps.has(a.ip_address) ? 0 : 1
       const bMine = myIps.has(b.ip_address) ? 0 : 1
       if (aMine !== bMine) return aMine - bMine
-      if (sortBy === 'risk_score') return (b.risk_score ?? 0) - (a.risk_score ?? 0)
-      if (sortBy === 'last_seen') return new Date(b.last_seen_at ?? 0).getTime() - new Date(a.last_seen_at ?? 0).getTime()
-      return a.ip_address.localeCompare(b.ip_address, undefined, { numeric: true, sensitivity: 'base' })
+      return (b.risk_score ?? 0) - (a.risk_score ?? 0)
     })
     return r
-  }, [nodes, deviceFilter, severityFilter, search, sortBy, vulnsByNode, myIps])
+  }, [nodes, deviceFilter, severityFilter, search, vulnsByNode, myIps])
 
   const filteredVulns = useMemo(() => {
     let r = [...allVulns]
@@ -437,10 +395,8 @@ export default function NetworkPage() {
   }, [])
 
   const fetchHostInterfaces = useCallback(async () => {
-    setIfacesLoading(true)
     try { const res = await getHostInterfaces(); setHostIfaces(res.data) }
     catch { setHostIfaces({ interfaces: [], lan_interfaces: [], docker_only: null, has_lan_access: false, primary_range: null, gateway_ip: null, error: 'Cannot reach nmap worker' }) }
-    finally { setIfacesLoading(false) }
   }, [])
 
   const fetchHostAgentStatus = useCallback(async () => {
@@ -503,79 +459,55 @@ export default function NetworkPage() {
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   const handleDiscover = async () => {
-    const range = customRange.trim() || hostIfaces?.primary_range || undefined
-    if (!range && !hostAgent?.available) {
-      toast.error('Enter your host IP in the sidebar to set the scan range')
-      return
-    }
     setIsDiscovering(true)
     setDiscoveryResult(null)
     const prevNodes = nodes
-
-    // ── WebSocket streaming discovery ─────────────────────────────────────────
-    const token = store.getState().auth.accessToken ?? ''
-    const wsUrl = discoveryWsUrl(token, range)
-    const ws = new WebSocket(wsUrl)
-    let nodesFound = 0
-    const newIps = new Set<string>()
     const prevIps = new Set(prevNodes.map(n => n.ip_address))
     const liveNodes: NetworkNode[] = [...prevNodes]
+    let newNodes = 0
+    let updatedNodes = 0
+
+    const token = store.getState().auth.accessToken ?? ''
+    const ws = new WebSocket(discoveryWsUrl(token))
 
     ws.onmessage = (ev) => {
       try {
         const msg = JSON.parse(ev.data as string)
         if (msg.type === 'node' && msg.node) {
           const n = msg.node as NetworkNode
-          nodesFound++
-          if (!prevIps.has(n.ip_address)) {
-            newIps.add(n.ip_address)
+          const idx = liveNodes.findIndex(x => x.ip_address === n.ip_address)
+          if (idx >= 0) {
+            liveNodes[idx] = n
+            updatedNodes++
+          } else {
             liveNodes.push(n)
+            if (!prevIps.has(n.ip_address)) newNodes++
           }
           setNodes([...liveNodes])
         } else if (msg.type === 'done') {
-          setDiscoveryResult({ nodesFound, range: range ?? 'network', newNodes: newIps.size })
-          setRecentlyFoundIps(new Set(newIps))
+          const newIps = new Set(liveNodes.filter(n => !prevIps.has(n.ip_address)).map(n => n.ip_address))
+          setRecentlyFoundIps(newIps)
           setTimeout(() => setRecentlyFoundIps(new Set()), 30000)
-          toast.success(`Discovery complete — ${nodesFound} node(s) found`)
+          setDiscoveryResult({ success: true, newNodes, updatedNodes })
+          toast.success(`Discovery complete — ${newNodes} new, ${updatedNodes} updated`)
           setIsDiscovering(false)
           fetchAllVulns()
         } else if (msg.type === 'error') {
-          // Fall back to REST discovery on WS error
           toast.error(msg.message ?? 'Discovery error')
+          setDiscoveryResult({ success: false, message: msg.message ?? 'Discovery error' })
           setIsDiscovering(false)
         }
       } catch { /* ignore parse errors */ }
     }
 
-    ws.onerror = async () => {
-      // WS unavailable — fall back to REST endpoint
-      ws.close()
-      try {
-        const res = await discoverNetwork(range)
-        setCustomRange('')
-        if (res.data.status === 'completed') {
-          const count = res.data.nodes_found ?? 0
-          try {
-            const refreshed = await getNodes()
-            const freshNodes = refreshed.data
-            const newIpsFallback = freshNodes.filter(n => !prevIps.has(n.ip_address)).map(n => n.ip_address)
-            setRecentlyFoundIps(new Set(newIpsFallback))
-            setNodes(freshNodes)
-            setTimeout(() => setRecentlyFoundIps(new Set()), 30000)
-            setDiscoveryResult({ nodesFound: count, range: range ?? 'network', newNodes: newIpsFallback.length })
-          } catch { /* ignore */ }
-          toast.success(`Discovery complete — ${count} node(s) found`)
-        } else {
-          const scanRes = await getScan(res.data.scan_id)
-          setActiveScan(scanRes.data)
-          toast.success('Network discovery started')
-        }
-      } catch (err) { toast.error('Failed to start discovery'); console.error(err) }
-      finally { setIsDiscovering(false) }
+    ws.onerror = () => {
+      setDiscoveryResult({ success: false, message: 'WebSocket connection failed' })
+      toast.error('Discovery connection failed')
+      setIsDiscovering(false)
     }
 
-    ws.onclose = (ev) => {
-      if (ev.code !== 1000 && isDiscovering) setIsDiscovering(false)
+    ws.onclose = () => {
+      setIsDiscovering(false)
     }
   }
 
@@ -701,139 +633,97 @@ export default function NetworkPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* ── Left Sidebar ─────────────────────────────────────────────────── */}
         <div className="w-[260px] shrink-0 border-r border-cyber-border flex flex-col overflow-y-auto">
-          <div className="px-4 py-3 border-b border-cyber-border shrink-0">
-            <h1 className="text-sm font-bold text-white flex items-center gap-2">
-              <Network className="w-4 h-4 text-cyber-primary" />
-              Private Network
-            </h1>
-            <p className="text-xs text-slate-500 mt-0.5">{nodes.length} asset{nodes.length !== 1 ? 's' : ''} discovered</p>
+          {/* Title + count */}
+          <div className="px-4 py-3 border-b border-cyber-border">
+            <h2 className="text-sm font-semibold text-white">Network Assets</h2>
+            <p className="text-xs text-slate-500 mt-0.5">{filteredNodes.length} of {nodes.length} assets</p>
           </div>
 
-          <div className="flex-1 p-3 space-y-4 overflow-y-auto">
-            {/* Search */}
+          {/* Search */}
+          <div className="p-3 border-b border-cyber-border">
             <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 pointer-events-none" />
-              <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search IP, hostname…"
-                className="w-full bg-cyber-bg border border-cyber-border rounded px-2 py-1.5 pl-6 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyber-primary" />
+              <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-slate-500" />
+              <input
+                type="text"
+                placeholder="Search IP, hostname..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full pl-7 pr-3 py-2 text-xs bg-cyber-bg border border-cyber-border rounded text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyber-primary"
+              />
             </div>
+          </div>
 
-            {/* Device type */}
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Device Type</p>
-              <div className="flex flex-wrap gap-1">
-                {DEVICE_FILTER_TYPES.map(f => (
-                  <button key={f} onClick={() => setDeviceFilter(f)}
-                    className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                      deviceFilter === f
-                        ? 'bg-cyber-primary/20 border border-cyber-primary/40 text-cyber-primary'
-                        : 'bg-cyber-surface border border-cyber-border text-slate-500 hover:text-white'
-                    }`}>
-                    {f === 'all' ? 'All' : DEVICE_LABELS[f]}
-                  </button>
-                ))}
-              </div>
+          {/* Device type filter */}
+          <div className="p-3 border-b border-cyber-border">
+            <p className="text-xs text-slate-500 mb-2 font-medium">DEVICE TYPE</p>
+            <div className="flex flex-wrap gap-1">
+              {DEVICE_FILTER_TYPES.map(type => (
+                <button
+                  key={type}
+                  onClick={() => setDeviceFilter(type)}
+                  className={`px-2 py-0.5 text-xs rounded border transition-colors ${
+                    deviceFilter === type
+                      ? 'bg-cyber-primary border-cyber-primary text-cyber-bg'
+                      : 'bg-transparent border-cyber-border text-slate-500 hover:border-cyber-primary hover:text-white'
+                  }`}
+                >
+                  {type === 'all' ? 'All' : DEVICE_LABELS[type] ?? (type.charAt(0).toUpperCase() + type.slice(1))}
+                </button>
+              ))}
             </div>
+          </div>
 
-            {/* Severity filter */}
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Severity</p>
-              <div className="flex flex-wrap gap-1">
-                {(['all', 'critical', 'high', 'medium', 'low', 'info'] as const).map(s => {
-                  const cfg = s !== 'all' ? SEV[s] : null
-                  return (
-                    <button key={s} onClick={() => setSeverityFilter(s)}
-                      className={`px-2 py-0.5 rounded text-xs font-medium transition-colors border ${
-                        severityFilter === s
-                          ? s === 'all'
-                            ? 'bg-cyber-primary/20 border-cyber-primary/40 text-cyber-primary'
-                            : `${cfg?.bg} ${cfg?.border} ${cfg?.text}`
-                          : 'bg-transparent border-cyber-border text-slate-500 hover:text-white'
-                      }`}>
-                      {s === 'all' ? 'All' : cfg?.label}
-                    </button>
-                  )
-                })}
-              </div>
+          {/* Severity filter */}
+          <div className="p-3 border-b border-cyber-border">
+            <p className="text-xs text-slate-500 mb-2 font-medium">RISK</p>
+            <div className="flex flex-wrap gap-1">
+              {(['all', 'critical', 'high', 'medium', 'low', 'info'] as const).map(s => (
+                <button
+                  key={s}
+                  onClick={() => setSeverityFilter(s)}
+                  className={`px-2 py-0.5 text-xs rounded border transition-colors ${
+                    severityFilter === s
+                      ? 'bg-cyber-primary border-cyber-primary text-cyber-bg'
+                      : 'bg-transparent border-cyber-border text-slate-500 hover:border-cyber-primary hover:text-white'
+                  }`}
+                >
+                  {s.charAt(0).toUpperCase() + s.slice(1)}
+                </button>
+              ))}
             </div>
+          </div>
 
-            {/* Sort */}
-            <div>
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Sort By</p>
-              <div className="space-y-0.5">
-                {SORT_OPTIONS.map(({ value, label }) => (
-                  <button key={value} onClick={() => setSortBy(value)}
-                    className={`w-full text-left px-2 py-1 rounded text-xs transition-colors ${
-                      sortBy === value ? 'bg-cyber-primary/10 text-cyber-primary' : 'text-slate-500 hover:text-slate-200'
-                    }`}>
-                    {label}
-                  </button>
-                ))}
+          {/* Discover button */}
+          <div className="p-3 mt-auto">
+            {discoveryResult && (
+              <div className={`mb-2 p-2 rounded text-xs ${
+                discoveryResult.success
+                  ? 'bg-green-900/30 text-green-400 border border-green-800'
+                  : 'bg-red-900/30 text-red-400 border border-red-800'
+              }`}>
+                {discoveryResult.success
+                  ? `✓ Found ${discoveryResult.newNodes} new, ${discoveryResult.updatedNodes} updated`
+                  : `✗ ${discoveryResult.message}`}
               </div>
-            </div>
-
-            {/* Discovery zone */}
-            <div className="border-t border-cyber-border pt-3 space-y-3">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Discovery</p>
-
-              <div>
-                <p className="text-xs text-slate-500 mb-1.5">Enter host IP → auto-derive range:</p>
-                <HostIPInput onRangeDetected={range => setCustomRange(range)} />
-              </div>
-
-              {customRange && (
-                <p className="text-xs font-mono text-cyber-primary">{customRange}</p>
+            )}
+            <button
+              onClick={() => handleDiscover()}
+              disabled={isDiscovering}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 bg-cyber-primary text-cyber-bg text-xs font-semibold rounded hover:bg-cyber-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isDiscovering ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Scanning Network…
+                </>
+              ) : (
+                <>
+                  <Wifi className="h-3.5 w-3.5" />
+                  Scan Network
+                </>
               )}
-
-              <button onClick={handleDiscover} disabled={isScanning || isDiscovering}
-                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg bg-cyber-primary/20 border border-cyber-primary/40 text-cyber-primary hover:bg-cyber-primary/30 text-xs font-medium disabled:opacity-50">
-                {isDiscovering ? <><RefreshCw className="w-3 h-3 animate-spin" />Discovering…</> : isScanning ? <><RefreshCw className="w-3 h-3 animate-spin" />Scanning…</> : <><Search className="w-3 h-3" />Discover Network</>}
-              </button>
-
-              {/* Discovery result banner */}
-              {discoveryResult && (
-                <div className="mt-2 p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-xs">
-                  <div className="flex items-start justify-between gap-1">
-                    <div className="flex items-start gap-1.5">
-                      <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-emerald-300 font-medium">Discovery complete</p>
-                        <p className="text-slate-400 mt-0.5">{discoveryResult.nodesFound} nodes on {discoveryResult.range}</p>
-                        {discoveryResult.newNodes > 0 && (
-                          <p className="text-cyan-400 mt-0.5">+{discoveryResult.newNodes} new</p>
-                        )}
-                      </div>
-                    </div>
-                    <button onClick={() => setDiscoveryResult(null)} className="text-slate-500 hover:text-white shrink-0">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Worker status */}
-              <div className="pt-1">
-                {ifacesLoading ? (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500">
-                    <RefreshCw className="w-3 h-3 animate-spin" /> Checking worker…
-                  </div>
-                ) : hostIfaces?.error && !hostIfaces.interfaces.length ? (
-                  <div className="flex items-center gap-1.5 text-xs text-rose-400">
-                    <XCircle className="w-3 h-3" /> nmap worker offline
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 text-xs text-emerald-400">
-                    <CheckCircle className="w-3 h-3" /> nmap worker online
-                    {hostIfaces?.gateway_ip && (
-                      <button onClick={() => setCustomRange(hostIfaces.gateway_ip!.replace(/\.\d+$/, '.0') + '/24')}
-                        className="font-mono text-cyber-primary hover:underline ml-auto text-xs" title="Use gateway subnet">
-                        {hostIfaces.gateway_ip}
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
+            </button>
+            <p className="text-xs text-slate-500 mt-1.5 text-center">Auto-discovers all LAN devices</p>
           </div>
         </div>
 
@@ -855,15 +745,17 @@ export default function NetworkPage() {
           {/* Tab bar */}
           <div className="flex items-center border-b border-cyber-border px-4 shrink-0">
             {([
-              ['assets', 'Assets'],
+              ['assets',          'Assets'],
               ['vulnerabilities', 'Vulnerabilities'],
-              ['topology', 'Topology & Traffic'],
+              ['topology',        'Topology'],
+              ['traffic',         'Live Traffic'],
             ] as const).map(([tab, label]) => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
                   activeTab === tab ? 'border-cyber-primary text-cyber-primary' : 'border-transparent text-slate-400 hover:text-white'
                 }`}>
                 {tab === 'topology' && <GitBranch className="w-3.5 h-3.5 inline mr-1.5 -mt-0.5" />}
+                {tab === 'traffic'  && <Activity  className="w-3.5 h-3.5 inline mr-1.5 -mt-0.5" />}
                 {label}
                 {tab === 'assets' && <span className="ml-1.5 text-xs text-slate-500">{filteredNodes.length}</span>}
                 {tab === 'vulnerabilities' && nonInfoVulnCount > 0 && (
@@ -888,7 +780,7 @@ export default function NetworkPage() {
           </div>
 
           {/* Tab content */}
-          <div className="flex-1 overflow-y-auto">
+          <div className={`flex-1 ${activeTab === 'topology' || activeTab === 'traffic' ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
             {/* ── ASSETS TAB ─────────────────────────────────────────────── */}
             {activeTab === 'assets' && (
               filteredNodes.length === 0 ? (
@@ -1044,49 +936,120 @@ export default function NetworkPage() {
               )
             )}
 
-            {/* ── TOPOLOGY & TRAFFIC TAB ────────────────────────────────────── */}
+            {/* ── TOPOLOGY TAB ────────────────────────────────────────────── */}
             {activeTab === 'topology' && (
               topoLoading && !topology ? (
                 <div className="flex justify-center py-16"><LoadingSpinner size="lg" /></div>
               ) : (
-                <div className="flex flex-col h-full" style={{ minHeight: '600px' }}>
-                  {/* Topology Map */}
-                  <div className="flex-none" style={{ height: '420px' }}>
-                    <div className="h-full border-b border-slate-700/60">
-                      <div className="flex items-center gap-2 px-4 py-2 border-b border-slate-700/40 bg-slate-900/50">
-                        <GitBranch className="w-4 h-4 text-cyan-400" />
-                        <span className="text-sm font-semibold text-white">Network Topology</span>
-                        <span className="text-xs text-slate-500">
-                          {topology ? `${topology.nodes.length} nodes · ${topology.edges.length} connections` : 'Loading…'}
-                        </span>
-                        {topology?.gateway_ip && (
-                          <span className="ml-auto text-xs text-slate-500">
-                            Gateway: <span className="text-blue-400 font-mono">{topology.gateway_ip}</span>
-                          </span>
-                        )}
+                <div className="relative flex flex-col h-full" style={{ minHeight: '600px' }}>
+
+                  {/* Header bar */}
+                  <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-700/40 bg-slate-900/50 flex-shrink-0">
+                    <GitBranch className="w-4 h-4 text-cyan-400" />
+                    <span className="text-sm font-semibold text-white">Network Topology</span>
+                    <span className="text-xs text-slate-500">
+                      {topology ? `${topology.nodes.length} nodes · ${topology.edges.length} connections` : 'No data'}
+                    </span>
+                    {topology?.gateway_ip && (
+                      <span className="text-xs text-slate-500">
+                        · Gateway: <span className="text-blue-400 font-mono">{topology.gateway_ip}</span>
+                      </span>
+                    )}
+                    <span className="ml-auto text-xs text-slate-500">Click a node for details</span>
+                  </div>
+
+                  {/* Full-width map */}
+                  <div className="flex-1 min-h-0">
+                    <TopologyMap
+                      nodes={topology?.nodes ?? []}
+                      edges={topology?.edges ?? []}
+                      activeIps={topoActiveIps}
+                      selectedIp={topoSelectedNode?.ip}
+                      onNodeClick={n => {
+                        setTopoSelectedNode(prev => prev?.ip === n.ip ? null : n)
+                        if (n.db_id) {
+                          const dbNode = nodes.find(nd => nd.id === n.db_id)
+                          if (dbNode) setSelectedNode(dbNode)
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {/* Floating node detail card (overlay) */}
+                  {topoSelectedNode && (
+                    <div className="absolute bottom-4 left-4 w-72 bg-slate-900/95 border border-slate-700 rounded-xl shadow-2xl backdrop-blur-sm z-10">
+                      <div className="flex items-start justify-between px-4 pt-3 pb-2 border-b border-slate-700/60">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-white text-sm">{topoSelectedNode.ip}</span>
+                            {topoSelectedNode.device_type && (
+                              <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded uppercase tracking-wide">
+                                {topoSelectedNode.device_type}
+                              </span>
+                            )}
+                            {topoSelectedNode.is_gateway && (
+                              <span className="text-[10px] px-1.5 py-0.5 bg-blue-900/60 text-blue-300 rounded border border-blue-700/40">Gateway</span>
+                            )}
+                            {topoSelectedNode.is_host && (
+                              <span className="text-[10px] px-1.5 py-0.5 bg-emerald-900/60 text-emerald-300 rounded border border-emerald-700/40">This Machine</span>
+                            )}
+                            {topoActiveIps.has(topoSelectedNode.ip) && (
+                              <span className="flex items-center gap-1 text-[10px] text-cyan-400">
+                                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          {topoSelectedNode.hostname && (
+                            <p className="text-xs text-slate-400 mt-0.5 truncate">{topoSelectedNode.hostname}</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => setTopoSelectedNode(null)}
+                          className="ml-3 text-slate-500 hover:text-white transition-colors flex-shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
                       </div>
-                      <div style={{ height: 'calc(100% - 37px)' }}>
-                        <TopologyMap
-                          nodes={topology?.nodes ?? []}
-                          edges={topology?.edges ?? []}
-                          activeIps={topoActiveIps}
-                          onNodeClick={n => {
-                            if (n.db_id) {
-                              const dbNode = nodes.find(nd => nd.id === n.db_id)
-                              if (dbNode) setSelectedNode(dbNode)
-                            }
-                          }}
-                        />
-                      </div>
+                      {topoSelectedNode.open_ports && topoSelectedNode.open_ports.length > 0 ? (
+                        <div className="px-4 py-3">
+                          <p className="text-[10px] text-slate-500 uppercase tracking-wide mb-2">Open Ports</p>
+                          <div className="flex gap-1 flex-wrap">
+                            {(topoSelectedNode.open_ports as number[]).slice(0, 12).map(p => (
+                              <span key={p} className="text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-mono border border-slate-700">{p}</span>
+                            ))}
+                            {topoSelectedNode.open_ports.length > 12 && (
+                              <span className="text-[10px] text-slate-500 self-center">+{topoSelectedNode.open_ports.length - 12} more</span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="px-4 py-3 text-xs text-slate-500">No port scan data · run a scan from Assets tab</div>
+                      )}
                     </div>
-                  </div>
-                  {/* Traffic Monitor */}
-                  <div className="flex-1 overflow-hidden" style={{ minHeight: '240px' }}>
-                    <TrafficMonitor onActiveIpsChange={setTopoActiveIps} />
-                  </div>
+                  )}
+
                 </div>
               )
             )}
+
+            {/* ── LIVE TRAFFIC TAB ─────────────────────────────────────────── */}
+            {activeTab === 'traffic' && (
+              <div className="flex flex-col h-full">
+                <div className="flex items-center gap-3 px-4 py-2.5 border-b border-slate-700/40 bg-slate-900/50 flex-shrink-0">
+                  <Activity className="w-4 h-4 text-cyan-400" />
+                  <span className="text-sm font-semibold text-white">Live Network Traffic</span>
+                  <span className="text-xs text-slate-500">Your machine's traffic · real-time packet capture</span>
+                  <span className="ml-auto text-xs text-slate-500">
+                    Select an interface and click <strong className="text-slate-400">Start</strong> to begin
+                  </span>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <TrafficMonitor onActiveIpsChange={setTopoActiveIps} />
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
 
