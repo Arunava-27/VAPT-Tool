@@ -146,7 +146,7 @@ function NodeDetailPanel({
   const highCount = nonInfoVulns.filter(v => v.severity === 'high').length
 
   return (
-    <div className="w-[460px] shrink-0 border-l border-cyber-border flex flex-col overflow-hidden">
+    <div className="w-[460px] shrink-0 border-l border-cyber-border flex flex-col overflow-hidden" style={{ maxHeight: '100%' }}>
       {/* Header */}
       <div className="px-4 py-3 border-b border-cyber-border shrink-0 bg-cyber-surface">
         <div className="flex items-start justify-between gap-2">
@@ -195,7 +195,7 @@ function NodeDetailPanel({
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-5">
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-5">
         {/* Ports & Services */}
         <section>
           <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -632,69 +632,72 @@ export default function NetworkPage() {
       {/* ── Body ─────────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
         {/* ── Left Sidebar ─────────────────────────────────────────────────── */}
-        <div className="w-[260px] shrink-0 border-r border-cyber-border flex flex-col overflow-y-auto">
+        <div className="w-[260px] shrink-0 border-r border-cyber-border flex flex-col overflow-hidden">
           {/* Title + count */}
-          <div className="px-4 py-3 border-b border-cyber-border">
+          <div className="px-4 py-3 border-b border-cyber-border shrink-0">
             <h2 className="text-sm font-semibold text-white">Network Assets</h2>
             <p className="text-xs text-slate-500 mt-0.5">{filteredNodes.length} of {nodes.length} assets</p>
           </div>
 
-          {/* Search */}
-          <div className="p-3 border-b border-cyber-border">
-            <div className="relative">
-              <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-slate-500" />
-              <input
-                type="text"
-                placeholder="Search IP, hostname..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                className="w-full pl-7 pr-3 py-2 text-xs bg-cyber-bg border border-cyber-border rounded text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyber-primary"
-              />
+          {/* Scrollable filters area */}
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {/* Search */}
+            <div className="p-3 border-b border-cyber-border">
+              <div className="relative">
+                <Search className="absolute left-2 top-2.5 h-3.5 w-3.5 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Search IP, hostname..."
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  className="w-full pl-7 pr-3 py-2 text-xs bg-cyber-bg border border-cyber-border rounded text-slate-300 placeholder-slate-600 focus:outline-none focus:border-cyber-primary"
+                />
+              </div>
+            </div>
+
+            {/* Device type filter */}
+            <div className="p-3 border-b border-cyber-border">
+              <p className="text-xs text-slate-500 mb-2 font-medium">DEVICE TYPE</p>
+              <div className="flex flex-wrap gap-1">
+                {DEVICE_FILTER_TYPES.map(type => (
+                  <button
+                    key={type}
+                    onClick={() => setDeviceFilter(type)}
+                    className={`px-2 py-0.5 text-xs rounded border transition-colors ${
+                      deviceFilter === type
+                        ? 'bg-cyber-primary border-cyber-primary text-cyber-bg'
+                        : 'bg-transparent border-cyber-border text-slate-500 hover:border-cyber-primary hover:text-white'
+                    }`}
+                  >
+                    {type === 'all' ? 'All' : DEVICE_LABELS[type] ?? (type.charAt(0).toUpperCase() + type.slice(1))}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Severity filter */}
+            <div className="p-3 border-b border-cyber-border">
+              <p className="text-xs text-slate-500 mb-2 font-medium">RISK</p>
+              <div className="flex flex-wrap gap-1">
+                {(['all', 'critical', 'high', 'medium', 'low', 'info'] as const).map(s => (
+                  <button
+                    key={s}
+                    onClick={() => setSeverityFilter(s)}
+                    className={`px-2 py-0.5 text-xs rounded border transition-colors ${
+                      severityFilter === s
+                        ? 'bg-cyber-primary border-cyber-primary text-cyber-bg'
+                        : 'bg-transparent border-cyber-border text-slate-500 hover:border-cyber-primary hover:text-white'
+                    }`}
+                  >
+                    {s.charAt(0).toUpperCase() + s.slice(1)}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Device type filter */}
-          <div className="p-3 border-b border-cyber-border">
-            <p className="text-xs text-slate-500 mb-2 font-medium">DEVICE TYPE</p>
-            <div className="flex flex-wrap gap-1">
-              {DEVICE_FILTER_TYPES.map(type => (
-                <button
-                  key={type}
-                  onClick={() => setDeviceFilter(type)}
-                  className={`px-2 py-0.5 text-xs rounded border transition-colors ${
-                    deviceFilter === type
-                      ? 'bg-cyber-primary border-cyber-primary text-cyber-bg'
-                      : 'bg-transparent border-cyber-border text-slate-500 hover:border-cyber-primary hover:text-white'
-                  }`}
-                >
-                  {type === 'all' ? 'All' : DEVICE_LABELS[type] ?? (type.charAt(0).toUpperCase() + type.slice(1))}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Severity filter */}
-          <div className="p-3 border-b border-cyber-border">
-            <p className="text-xs text-slate-500 mb-2 font-medium">RISK</p>
-            <div className="flex flex-wrap gap-1">
-              {(['all', 'critical', 'high', 'medium', 'low', 'info'] as const).map(s => (
-                <button
-                  key={s}
-                  onClick={() => setSeverityFilter(s)}
-                  className={`px-2 py-0.5 text-xs rounded border transition-colors ${
-                    severityFilter === s
-                      ? 'bg-cyber-primary border-cyber-primary text-cyber-bg'
-                      : 'bg-transparent border-cyber-border text-slate-500 hover:border-cyber-primary hover:text-white'
-                  }`}
-                >
-                  {s.charAt(0).toUpperCase() + s.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Discover button */}
-          <div className="p-3 mt-auto">
+          {/* Discover button — always pinned at bottom */}
+          <div className="p-3 shrink-0 border-t border-cyber-border bg-cyber-surface">
             {discoveryResult && (
               <div className={`mb-2 p-2 rounded text-xs ${
                 discoveryResult.success
@@ -941,7 +944,7 @@ export default function NetworkPage() {
               topoLoading && !topology ? (
                 <div className="flex justify-center py-16"><LoadingSpinner size="lg" /></div>
               ) : (
-                <div className="relative flex flex-col h-full" style={{ minHeight: '600px' }}>
+                <div className="relative flex flex-col" style={{ height: '100%', minHeight: '600px' }}>
 
                   {/* Header bar */}
                   <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-700/40 bg-slate-900/50 flex-shrink-0">

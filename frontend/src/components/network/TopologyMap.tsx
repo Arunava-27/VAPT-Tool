@@ -212,34 +212,36 @@ export default function TopologyMap({
   }
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onNodeClick={handleNodeClick}
-      fitView
-      fitViewOptions={{ padding: 0.25 }}
-      minZoom={0.25}
-      maxZoom={2}
-      colorMode="dark"
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1e293b" />
-      <Controls className="!bg-slate-800 !border-slate-600 !rounded-lg" />
-      <MiniMap
-        className="!bg-slate-900 !border-slate-700 !rounded-lg"
-        nodeColor={n => {
-          const orig = tNodes.find(t => t.id === n.id)
-          if (!orig) return '#475569'
-          if (orig.is_gateway) return '#60a5fa'
-          if (orig.is_host)    return '#34d399'
-          const s = orig.risk_score
-          return s >= 70 ? '#ef4444' : s >= 40 ? '#f97316' : s >= 10 ? '#eab308' : '#64748b'
-        }}
-        maskColor="rgba(15,23,42,0.7)"
-      />
-    </ReactFlow>
+    <div style={{ width: '100%', height: '100%' }}>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeClick={handleNodeClick}
+        fitView
+        fitViewOptions={{ padding: 0.25 }}
+        minZoom={0.25}
+        maxZoom={2}
+        colorMode="dark"
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#1e293b" />
+        <Controls className="!bg-slate-800 !border-slate-600 !rounded-lg" />
+        <MiniMap
+          className="!bg-slate-900 !border-slate-700 !rounded-lg"
+          nodeColor={n => {
+            const orig = tNodes.find(t => t.id === n.id)
+            if (!orig) return '#475569'
+            if (orig.is_gateway) return '#60a5fa'
+            if (orig.is_host)    return '#34d399'
+            const s = orig.risk_score
+            return s >= 70 ? '#ef4444' : s >= 40 ? '#f97316' : s >= 10 ? '#eab308' : '#64748b'
+          }}
+          maskColor="rgba(15,23,42,0.7)"
+        />
+      </ReactFlow>
+    </div>
   )
 }
