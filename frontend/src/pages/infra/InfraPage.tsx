@@ -7,7 +7,8 @@ import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { getServicesHealth, runServiceAction, getHostAgentStatus, shutdownHostAgent } from '../../api/infra'
 import type { ServiceHealth, ServicesHealthResponse, HostAgentStatus } from '../../api/infra'
-import { startService, stopService } from '../../api/services'
+import { listAllServices, startService, stopService } from '../../api/services'
+import type { ServiceInfo } from '../../api/services'
 import { usePolling } from '../../hooks/usePolling'
 import LoadingSpinner from '../../components/common/LoadingSpinner'
 import ServiceDrawer from '../../components/infra/ServiceDrawer'
@@ -690,6 +691,106 @@ function OverallBanner({ data }: { data: ServicesHealthResponse }) {
 
 const ORDERED_CATEGORIES = ['database', 'cache', 'queue', 'search', 'storage', 'backend', 'secrets', 'worker'] as const
 
+const SVC_GROUPS: { key: string; label: string; icon: React.ElementType; cats: string[] }[] = [
+  { key: 'data',    label: 'Data Layer',   icon: Database, cats: ['data'] },
+  { key: 'backend', label: 'Backend & AI', icon: Bot,      cats: ['backend'] },
+  { key: 'workers', label: 'Security Workers', icon: Cpu,  cats: ['worker'] },
+]
+
+function StatusDot({ status }: { status: string }) {
+  const running = status === 'running'
+  return (
+    <span className={`w-2 h-2 rounded-full shrink-0 ${running ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+  )
+}
+
+function AgentServiceCard({
+  svc, actionId, onStart, onStop,
+}: {
+  svc: ServiceInfo
+  actionId: string | null
+  onStart: (svc: ServiceInfo) => void
+  onStop: (svc: ServiceInfo) => void
+}) {
+  const isRunning = svc.status === 'running'
+  const isLoading = actionId === svc.id
+  const typeBadge =
+    svc.type === 'docker'  ? 'bg-blue-900/40 text-blue-400' :
+    svc.type === 'worker'  ? 'bg-purple-900/40 text-purple-400' :
+                             'bg-slate-800 text-slate-400'
+
+  return (
+    <div className={`bg-cyber-surface border rounded-xl p-4 flex flex-col gap-3 transition-colors ${isRunning ? 'border-cyber-border' : 'border-slate-700/40 opacity-70'}`}>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <StatusDot status={svc.status} />
+          <span className="text-sm font-medium text-white truncate">{svc.label}</span>
+          {svc.self && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-900/40 border border-cyan-700/40 text-cyan-400 shrink-0">self</span>
+          )}
+        </div>
+        <span className={`text-[10px] px-2 py-0.5 rounded shrink-0 ${typeBadge}`}>{svc.type}</span>
+      </div>
+
+      {/* Metrics — native & worker */}
+      {svc.type !== 'docker' && isRunning && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400">
+          {svc.cpu_percent !== undefined && (
+            <span className="flex items-center gap-1"><Cpu className="w-3 h-3" />{svc.cpu_percent.toFixed(1)}%</span>
+          )}
+          {svc.memory_mb !== undefined && (
+            <span className="flex items-center gap-1"><MemoryStick className="w-3 h-3" />{svc.memory_mb.toFixed(0)} MB</span>
+          )}
+          {svc.pid && (
+            <span className="flex items-center gap-1"><Hash className="w-3 h-3" />PID {svc.pid}</span>
+          )}
+          {svc.uptime_seconds !== undefined && svc.uptime_seconds > 0 && (
+            <span className="flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              {svc.uptime_seconds >= 3600
+                ? `${Math.floor(svc.uptime_seconds / 3600)}h`
+                : svc.uptime_seconds >= 60
+                ? `${Math.floor(svc.uptime_seconds / 60)}m`
+                : `${svc.uptime_seconds}s`}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Docker: container ID */}
+      {svc.type === 'docker' && svc.container && (
+        <p className="text-[10px] text-slate-600 font-mono truncate">{svc.container}</p>
+      )}
+
+      {/* Start / Stop */}
+      {!svc.self && (
+        <div className="flex gap-2 mt-auto">
+          {!isRunning ? (
+            <button
+              onClick={() => onStart(svc)}
+              disabled={isLoading}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-emerald-900/30 border border-emerald-700/50 text-emerald-400 text-xs hover:bg-emerald-900/50 disabled:opacity-50 transition-colors"
+            >
+              {isLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+              Start
+            </button>
+          ) : (
+            <button
+              onClick={() => onStop(svc)}
+              disabled={isLoading}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-rose-900/20 border border-rose-700/40 text-rose-400 text-xs hover:bg-rose-900/40 disabled:opacity-50 transition-colors"
+            >
+              {isLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Square className="w-3 h-3" />}
+              Stop
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function InfraPage() {
   const navigate = useNavigate()
   const [data, setData] = useState<ServicesHealthResponse | null>(null)
@@ -700,6 +801,8 @@ export default function InfraPage() {
   const [vaultUnsealOpen, setVaultUnsealOpen] = useState(false)
   const [vaultInitOpen, setVaultInitOpen] = useState(false)
   const [hostAgentStatus, setHostAgentStatus] = useState<HostAgentStatus | null>(null)
+  const [agentServices, setAgentServices] = useState<ServiceInfo[]>([])
+  const [svcAction, setSvcAction] = useState<string | null>(null)
 
   const hasData = useRef(false)
 
@@ -730,6 +833,52 @@ export default function InfraPage() {
   }, [fetchHostAgent])
 
   usePolling(fetchHealth, 15_000, autoRefresh)
+
+  const fetchAgentServices = useCallback(async () => {
+    try {
+      const svcs = await listAllServices()
+      setAgentServices(svcs)
+    } catch {
+      // host agent offline — silently degrade
+    }
+  }, [])
+
+  usePolling(fetchAgentServices, 5_000, autoRefresh)
+
+  const handleSvcStart = async (svc: ServiceInfo) => {
+    setSvcAction(svc.id)
+    try {
+      const res = await startService(svc.id)
+      if (res.ok) {
+        toast.success(`${svc.label} started`)
+        setTimeout(fetchAgentServices, 1200)
+      } else {
+        toast.error(res.message || `Failed to start ${svc.label}`)
+      }
+    } catch {
+      toast.error(`Failed to start ${svc.label}`)
+    } finally {
+      setSvcAction(null)
+    }
+  }
+
+  const handleSvcStop = async (svc: ServiceInfo) => {
+    if (!confirm(`Stop ${svc.label}?`)) return
+    setSvcAction(svc.id)
+    try {
+      const res = await stopService(svc.id)
+      if (res.ok) {
+        toast.success(`${svc.label} stopped`)
+        setTimeout(fetchAgentServices, 1200)
+      } else {
+        toast.error(res.message || `Failed to stop ${svc.label}`)
+      }
+    } catch {
+      toast.error(`Failed to stop ${svc.label}`)
+    } finally {
+      setSvcAction(null)
+    }
+  }
 
   const handleWorkerPurge = async (svcId: string) => {
     try {
@@ -830,6 +979,42 @@ export default function InfraPage() {
           <HostAgentCard status={hostAgentStatus} onRefresh={fetchHostAgent} />
         </div>
       </section>
+
+      {/* Service Control — powered by host-agent */}
+      {agentServices.length > 0 && (
+        <section className="space-y-5">
+          <h2 className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+            <Power className="w-3.5 h-3.5" />
+            Service Control
+            <span className="ml-auto text-slate-600 font-normal normal-case">
+              {agentServices.filter(s => s.status === 'running').length}/{agentServices.length} running
+            </span>
+          </h2>
+          {SVC_GROUPS.map(({ key, label, icon: Icon, cats }) => {
+            const svcs = agentServices.filter(s => cats.includes(s.category ?? ''))
+            if (!svcs.length) return null
+            return (
+              <div key={key}>
+                <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Icon className="w-3 h-3" />
+                  {label}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {svcs.map(svc => (
+                    <AgentServiceCard
+                      key={svc.id}
+                      svc={svc}
+                      actionId={svcAction}
+                      onStart={handleSvcStart}
+                      onStop={handleSvcStop}
+                    />
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </section>
+      )}
 
       {/* Service groups */}
       {Object.entries(grouped).map(([cat, svcs]) => (

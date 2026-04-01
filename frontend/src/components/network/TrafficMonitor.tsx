@@ -64,9 +64,14 @@ export default function TrafficMonitor({ onActiveIpsChange, hostFilter }: Traffi
 
   const disconnect = useCallback(() => {
     if (wsRef.current) {
-      try { wsRef.current.send(JSON.stringify({ action: 'stop' })) } catch { /* ignore */ }
-      wsRef.current.close()
+      const ws = wsRef.current
       wsRef.current = null
+      ws.onopen = null
+      ws.onerror = null
+      ws.onclose = null
+      ws.onmessage = null
+      try { ws.send(JSON.stringify({ action: 'stop' })) } catch { /* ignore */ }
+      ws.close()
     }
     setWsState('stopped')
   }, [])

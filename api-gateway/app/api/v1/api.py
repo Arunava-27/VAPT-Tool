@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles, network, logs, reports, settings
+from .endpoints import auth, scans, health, users, ai, infra, ws, setup, roles, network, logs, reports, settings, analytics
 
 api_router = APIRouter()
 
@@ -93,4 +93,11 @@ api_router.include_router(
     settings.router,
     prefix="/settings",
     tags=["settings"]
+)
+
+# Analytics (overview, search, audit trail, ES)
+api_router.include_router(
+    analytics.router,
+    prefix="/analytics",
+    tags=["analytics"]
 )
